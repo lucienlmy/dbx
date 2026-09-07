@@ -6701,6 +6701,12 @@ function activateTabDocument(prevTabId: string | undefined, tabId: string | unde
   const cached = tabId === undefined ? undefined : tabStateCache.get(tabId);
   if (!cached) {
     swapEditorDocument(doc);
+    // First activation in this editor instance (or a cache-evicted tab, e.g.
+    // beyond MAX_CACHED_TAB_STATES): restore the tab's saved cursor and scroll
+    // position exactly like the cached-state branch, otherwise the swapped-in
+    // document keeps whatever scroll offset the dispatch left behind (#8374).
+    restoreEditorSelection();
+    restoreEditorViewport();
     return;
   }
   // setState swaps doc, selection, undo history and all fields at once, but it
