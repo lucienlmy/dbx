@@ -5349,6 +5349,16 @@ fn effective_transfer_database_type(config: &ConnectionConfig) -> DatabaseType {
         return DatabaseType::Jdbc;
     }
 
+    // Oracle behind a generic JDBC connection: Oracle rejects MySQL-style
+    // multi-row VALUES lists with ORA-00933, so reuse the native Oracle
+    // transfer dialect (INSERT ALL, TO_DATE literals, row-capped batches).
+    let is_oracle =
+        config.connection_string.as_deref().is_some_and(|url| url.to_ascii_lowercase().contains("jdbc:oracle:"))
+            || config.jdbc_driver_class.as_deref().is_some_and(|class| class.to_ascii_lowercase().contains("oracle"));
+    if is_oracle {
+        return DatabaseType::Oracle;
+    }
+
     let jdbc_identity = [
         config.driver_profile.as_deref().unwrap_or(""),
         config.connection_string.as_deref().unwrap_or(""),
@@ -12894,6 +12904,56 @@ SELECT 1 FROM dual"#
         assert_eq!(statements[0].matches("\nINTO ").count(), MAX_ORACLE_INSERT_ALL_ROWS);
         assert!(statements[0].starts_with("INSERT ALL\nINTO "));
         assert!(statements[0].ends_with("SELECT 1 FROM dual"));
+    }
+
+    #[test]
+    fn oracle_jdbc_url_routes_multi_row_insert_through_insert_all() {
+        let config =
+            jdbc_transfer_config("jdbc:oracle:thin:@localhost:1521:ORCL", "oracle.jdbc.driver.OracleDriver", "");
+        assert_eq!(effective_transfer_database_type(&config), DatabaseType::Oracle);
+        // Mixed-case URL and driver class alone must be recognized too.
+        assert_eq!(
+            effective_transfer_database_type(&jdbc_transfer_config("JDBC:Oracle:thin:@localhost:1521:ORCL", "", "")),
+            DatabaseType::Oracle
+        );
+        assert_eq!(
+            effective_transfer_database_type(&jdbc_transfer_config("", "oracle.jdbc.OracleDriver", "")),
+            DatabaseType::Oracle
+        );
+
+        let sql = generate_insert_typed(
+            &[String::from("id"), String::from("name")],
+            &[Some(String::from("number")), Some(String::from("varchar2(64)"))],
+            &[vec![json!(1), json!("Ada")], vec![json!(2), json!("Grace")]],
+            "INSTR_CATEGORY",
+            "APP",
+            &effective_transfer_database_type(&config),
+            None,
+        );
+
+        assert!(sql.starts_with("INSERT ALL\nINTO "));
+        assert!(sql.ends_with("SELECT 1 FROM dual"));
+        assert!(!sql.contains("),\n("));
+    }
+
+    #[test]
+    fn non_oracle_jdbc_url_keeps_multi_row_values_insert() {
+        let config = jdbc_transfer_config("jdbc:mysql://localhost:3306/dbx_test", "com.mysql.cj.jdbc.Driver", "");
+        assert_eq!(effective_transfer_database_type(&config), DatabaseType::Jdbc);
+
+        let sql = generate_insert_typed(
+            &[String::from("id"), String::from("name")],
+            &[Some(String::from("int")), Some(String::from("varchar(64)"))],
+            &[vec![json!(1), json!("Ada")], vec![json!(2), json!("Grace")]],
+            "instr_category",
+            "",
+            &effective_transfer_database_type(&config),
+            None,
+        );
+
+        assert!(sql.starts_with("INSERT INTO "));
+        assert!(sql.contains("),\n("));
+        assert!(!sql.contains("INSERT ALL"));
     }
 
     #[test]
