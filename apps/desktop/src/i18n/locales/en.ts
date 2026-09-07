@@ -1456,6 +1456,7 @@ export default {
     tooltipGroup: "Group:",
     tooltipDatabase: "Database:",
     tooltipTable: "Table:",
+    tooltipTableComment: "Table Comment:",
     tooltipCollection: "Collection:",
     tooltipSchema: "Schema:",
     resultN: "Result {n}",

@@ -182,7 +182,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  openTable: [target: { tableName: string; schema?: string; tableType?: string; catalog?: string }];
+  openTable: [target: { tableName: string; schema?: string; tableType?: string; catalog?: string; comment?: string | null }];
   schemaChange: [schema: string | undefined];
   viewportChange: [viewport: ObjectBrowserViewport];
   searchChange: [query: string];
@@ -966,7 +966,7 @@ function executeRowAction(row: ObjectBrowserRow, action: ObjectBrowserRowAction)
       void openTypeInfo(row);
       break;
     case "open-table":
-      emit("openTable", { tableName: row.name, schema: row.schema, tableType: objectBrowserOpenTableType(row), catalog: props.catalog });
+      emit("openTable", { tableName: row.name, schema: row.schema, tableType: objectBrowserOpenTableType(row), catalog: props.catalog, comment: row.comment });
       break;
     case "open-source":
       void (row.type === "EVENT" ? openEventEditor(row) : openSource(row));
@@ -1736,7 +1736,7 @@ function objectBrowserOpenTableType(row: ObjectBrowserRow): string {
 }
 
 function openViewData(row: ObjectBrowserRow) {
-  emit("openTable", { tableName: row.name, schema: row.schema, tableType: objectBrowserOpenTableType(row), catalog: props.catalog });
+  emit("openTable", { tableName: row.name, schema: row.schema, tableType: objectBrowserOpenTableType(row), catalog: props.catalog, comment: row.comment });
 }
 
 function openStructureEditor(row: ObjectBrowserRow) {

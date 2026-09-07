@@ -1433,6 +1433,7 @@ export default withEnglishFallback({
     tooltipGroup: "Grupo:",
     tooltipDatabase: "Banco de dados:",
     tooltipTable: "Tabela:",
+    tooltipTableComment: "Comentário da tabela:",
     tooltipCollection: "Coleção:",
     tooltipSchema: "Schema:",
     resultN: "Resultado {n}",

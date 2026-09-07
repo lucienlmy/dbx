@@ -3579,7 +3579,7 @@ onUnmounted(() => {
                     @view-table-ddl="(_tabId: string, target: SqlObjectNavigationTarget) => onViewTableDdl(target)"
                     @open-object-source="(_tabId: string, target: SqlObjectNavigationTarget, initialEditing: boolean) => onOpenObjectSource(target, initialEditing)"
                     @open-object-table="
-                      (tabId: string, target: { tableName: string; schema?: string; tableType?: string; catalog?: string }) => {
+                      (tabId: string, target: { tableName: string; schema?: string; tableType?: string; catalog?: string; comment?: string | null }) => {
                         const tab = queryStore.tabs.find((candidate) => candidate.id === tabId) ?? activeTab;
                         if (!tab) return;
                         openObjectBrowserTableTarget({
@@ -3589,6 +3589,7 @@ onUnmounted(() => {
                           catalog: target.catalog,
                           tableName: target.tableName,
                           tableType: target.tableType,
+                          comment: target.comment,
                         });
                       }
                     "

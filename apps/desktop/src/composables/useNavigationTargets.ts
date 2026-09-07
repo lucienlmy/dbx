@@ -22,6 +22,7 @@ export type NavigationTarget = {
   schema?: string;
   tableName: string;
   tableType?: string;
+  comment?: string | null;
   columnName?: string;
   whereInput?: string;
 };
@@ -72,7 +73,10 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
   }
   const tabId = queryStore.createTab(target.connectionId, target.database, tabTitle, "data", tableSchema, undefined, undefined, { forceNew: true });
   const targetTab = queryStore.tabs.find((tab) => tab.id === tabId);
-  if (targetTab) targetTab.tableInfoTab = options.tableInfoTab;
+  if (targetTab) {
+    targetTab.tableInfoTab = options.tableInfoTab;
+    targetTab.tableComment = target.comment;
+  }
   // Stamp the new table identity synchronously so SQL rebuilds (refresh,
   // filters, row count) never read a stale tableMeta from a reused tab or
   // fall back to parsing the schema-qualified tab title (issue #3613).
@@ -339,6 +343,7 @@ export function useNavigationTargets(dialogs: { showFieldLineageDialog: { value:
         schema: target.schema,
         catalog: target.catalog,
         tableType: target.tableType,
+        comment: target.comment,
       },
       undefined,
       "default",

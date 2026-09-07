@@ -1450,6 +1450,7 @@ export default withEnglishFallback({
     tooltipGroup: "グループ:",
     tooltipDatabase: "データベース:",
     tooltipTable: "テーブル:",
+    tooltipTableComment: "テーブルコメント:",
     tooltipCollection: "コレクション:",
     tooltipSchema: "スキーマ:",
     resultN: "結果 {n}",

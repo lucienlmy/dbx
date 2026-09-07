@@ -1380,6 +1380,7 @@ export default withEnglishFallback({
     tooltipGroup: "分组：",
     tooltipDatabase: "数据库：",
     tooltipTable: "表：",
+    tooltipTableComment: "表注释：",
     tooltipCollection: "集合：",
     tooltipSchema: "Schema：",
     resultN: "结果 {n}",

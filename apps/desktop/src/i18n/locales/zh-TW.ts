@@ -1432,6 +1432,7 @@ export default withEnglishFallback({
     tooltipGroup: "群組：",
     tooltipDatabase: "資料庫：",
     tooltipTable: "資料表：",
+    tooltipTableComment: "資料表註解：",
     tooltipCollection: "集合：",
     tooltipSchema: "Schema：",
     resultN: "結果 {n}",

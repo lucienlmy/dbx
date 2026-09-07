@@ -1337,6 +1337,7 @@ export default withEnglishFallback({
     tooltipGroup: "그룹:",
     tooltipDatabase: "데이터베이스:",
     tooltipTable: "테이블:",
+    tooltipTableComment: "테이블 주석:",
     tooltipCollection: "컬렉션:",
     tooltipSchema: "스키마:",
     resultN: "결과 {n}",

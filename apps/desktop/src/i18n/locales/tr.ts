@@ -1456,6 +1456,7 @@ export default withEnglishFallback({
     tooltipGroup: "Grup:",
     tooltipDatabase: "Veritabanı:",
     tooltipTable: "Tablo:",
+    tooltipTableComment: "Tablo açıklaması:",
     tooltipCollection: "Koleksiyon:",
     tooltipSchema: "Şema:",
     resultN: "Sonuç {n}",
