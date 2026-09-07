@@ -24,7 +24,7 @@ use data_grid_tdengine_sql::{
 use crate::models::connection::DatabaseType;
 use crate::sql_dialect::{
     firebird_rows_clause, quote_table_identifier, table_pagination_strategy, uses_oracle_row_id,
-    uses_single_row_insert_statements, TablePaginationStrategy,
+    uses_single_row_insert_statements, uses_synthetic_row_id, uses_xugu_row_id, TablePaginationStrategy,
 };
 use crate::transfer::{format_ch_array_sql_literal, format_pg_array_sql_literal};
 
@@ -378,7 +378,7 @@ pub fn build_data_grid_copy_update_statements(options: DataGridCopyUpdateStateme
         .enumerate()
         .filter_map(|(index, column)| Some((column.as_deref()?, index)))
         .filter(|(column, _)| !primary_key_set.contains(&normalize_column_name(column)))
-        .filter(|(column, _)| !is_oracle_row_id(options.database_type, Some(column)))
+        .filter(|(column, _)| !is_synthetic_row_id(options.database_type, Some(column)))
         .map(|(column, index)| (column, index, column_info_for(column_info, column)))
         .collect();
     let primary_key_info =
@@ -1122,7 +1122,7 @@ fn validate_data_grid_save(options: &DataGridSaveStatementOptions) -> Option<Str
                 && column.column_default.is_none()
                 && !is_auto_generated_column(column)
                 && !is_non_identity_generated_column(Some(column))
-                && !is_oracle_row_id(options.database_type, Some(&column.name))
+                && !is_synthetic_row_id(options.database_type, Some(&column.name))
         })
         .map(|column| normalize_column_name(&column.name))
         .collect();
@@ -2848,7 +2848,7 @@ fn build_row_where(
         .enumerate()
         .filter_map(|(index, column)| {
             let column = column.as_deref()?;
-            if is_oracle_row_id(database_type, Some(column)) {
+            if is_synthetic_row_id(database_type, Some(column)) {
                 return None;
             }
             Some(build_column_predicate(
@@ -2876,7 +2876,7 @@ fn build_save_row_where(
         .enumerate()
         .filter_map(|(index, column)| {
             let column = column.as_deref()?;
-            if is_oracle_row_id(database_type, Some(column)) {
+            if is_synthetic_row_id(database_type, Some(column)) {
                 return None;
             }
             Some(build_save_column_predicate(
@@ -3057,8 +3057,8 @@ fn oracle_character_lob_constructor(data_type: &str) -> Option<&'static str> {
     }
 }
 
-fn is_oracle_row_id(database_type: Option<DatabaseType>, name: Option<&str>) -> bool {
-    uses_oracle_row_id(database_type) && name.is_some_and(|name| name.eq_ignore_ascii_case(DBX_ROWID_COLUMN))
+fn is_synthetic_row_id(database_type: Option<DatabaseType>, name: Option<&str>) -> bool {
+    uses_synthetic_row_id(database_type) && name.is_some_and(|name| name.eq_ignore_ascii_case(DBX_ROWID_COLUMN))
 }
 
 pub(crate) fn is_neo4j_element_id(database_type: Option<DatabaseType>, name: Option<&str>) -> bool {
@@ -3085,7 +3085,7 @@ pub(crate) fn is_grid_insert_omitted_column(
     name: Option<&str>,
     include_computed_columns: bool,
 ) -> bool {
-    is_oracle_row_id(database_type, name)
+    is_synthetic_row_id(database_type, name)
         || is_postgres_tsvector_column(database_type, column_info)
         || (!include_computed_columns && is_non_identity_generated_column(column_info))
 }
@@ -3096,7 +3096,7 @@ fn is_grid_update_omitted_column(
     name: Option<&str>,
     primary_key_set: &[String],
 ) -> bool {
-    is_oracle_row_id(database_type, name)
+    is_synthetic_row_id(database_type, name)
         || is_clickhouse_key_column(database_type, column_info, name, primary_key_set)
         || is_non_identity_generated_column(column_info)
 }
@@ -3150,7 +3150,7 @@ fn is_null_write_to_not_null_column(
     let Some(column) = column else {
         return false;
     };
-    if is_oracle_row_id(database_type, Some(column)) || is_neo4j_element_id(database_type, Some(column)) {
+    if is_synthetic_row_id(database_type, Some(column)) || is_neo4j_element_id(database_type, Some(column)) {
         return false;
     }
     value.is_null() && not_null_columns.iter().any(|not_null| not_null == &normalize_column_name(column))
@@ -3231,7 +3231,10 @@ fn clickhouse_no_mutable_columns_error() -> String {
 }
 
 fn predicate_ident(database_type: Option<DatabaseType>, name: &str, identifier_quote: Option<&str>) -> String {
-    if is_oracle_row_id(database_type, Some(name)) {
+    if is_synthetic_row_id(database_type, Some(name)) {
+        if uses_xugu_row_id(database_type) {
+            return "ROWID".to_string();
+        }
         "ROWIDTOCHAR(ROWID)".to_string()
     } else {
         data_grid_identifier(database_type, name, identifier_quote)
@@ -8240,6 +8243,42 @@ mod tests {
         assert_eq!(
             result.statements,
             vec![r#"INSERT INTO "APP"."TT_PLATFORM_CARS" ("ID", "PLATFORM") VALUES (72, '轻卡');"#]
+        );
+    }
+
+    #[test]
+    fn prepares_xugu_rowid_updates_deletes_and_inserts_without_writing_synthetic_key() {
+        let result = prepare_data_grid_save(DataGridSaveStatementOptions {
+            database_type: Some(DatabaseType::Xugu),
+            identifier_quote: None,
+            table_meta: DataGridTableMeta {
+                catalog: None,
+                database: None,
+                schema: Some("APP".to_string()),
+                table_name: "ROWID_TABLE".to_string(),
+                primary_keys: vec![DBX_ROWID_COLUMN.to_string()],
+                columns: Some(vec![
+                    column(DBX_ROWID_COLUMN, "ROWID", false, None),
+                    column("ID", "INTEGER", false, None),
+                    column("VALUE", "VARCHAR(40)", true, None),
+                ]),
+            },
+            columns: vec![DBX_ROWID_COLUMN.to_string(), "ID".to_string(), "VALUE".to_string()],
+            source_columns: None,
+            rows: vec![vec![json!("AA-1"), json!(1), json!("old")], vec![json!("AA-2"), json!(2), json!("remove")]],
+            dirty_rows: vec![(0, vec![(2, json!("new"))])],
+            deleted_rows: vec![1],
+            new_rows: vec![vec![Value::Null, json!(3), json!("inserted")]],
+        });
+
+        assert_eq!(result.validation_error, None);
+        assert_eq!(
+            result.statements,
+            vec![
+                "UPDATE \"APP\".\"ROWID_TABLE\" SET \"VALUE\" = 'new' WHERE ROWID = 'AA-1';",
+                "DELETE FROM \"APP\".\"ROWID_TABLE\" WHERE ROWID = 'AA-2';",
+                "INSERT INTO \"APP\".\"ROWID_TABLE\" (\"ID\", \"VALUE\") VALUES (3, 'inserted');",
+            ]
         );
     }
 
