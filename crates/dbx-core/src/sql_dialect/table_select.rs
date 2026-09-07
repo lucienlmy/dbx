@@ -555,7 +555,17 @@ pub fn build_table_select_sql(options: TableSelectSqlOptions<'_>) -> String {
             options
                 .order_columns
                 .iter()
-                .map(|column| format!("{} ASC", quote_table_identifier(database_type, column)))
+                .map(|column| {
+                    let quoted = if database_type == Some(DatabaseType::Iris) {
+                        // Caché/IRIS may run with delimited identifiers disabled,
+                        // where a quoted ORDER BY name becomes a string literal and
+                        // silently degrades to a constant sort.
+                        quote_iris_identifier(column, None)
+                    } else {
+                        quote_table_identifier(database_type, column)
+                    };
+                    format!("{quoted} ASC")
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -605,7 +615,20 @@ fn quoted_table_columns_or_star(database_type: Option<DatabaseType>, columns: &[
     if columns.is_empty() {
         return "*".to_string();
     }
-    columns.iter().map(|column| quote_table_identifier(database_type, column)).collect::<Vec<_>>().join(", ")
+    columns
+        .iter()
+        .map(|column| {
+            if database_type == Some(DatabaseType::Iris) {
+                // With delimited identifiers disabled, the Caché/IRIS JDBC
+                // preparser turns a quoted column name into a `:%qpar` host
+                // variable, so ordinary names must stay unquoted.
+                quote_iris_identifier(column, None)
+            } else {
+                quote_table_identifier(database_type, column)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn build_rownum_table_select_sql(

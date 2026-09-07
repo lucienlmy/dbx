@@ -339,6 +339,33 @@ fn builds_select_sql_with_limit_syntax_for_database_type() {
         }),
         "SELECT TOP 100 * FROM Ens.AlarmResponse"
     );
+    // Caché 2016 often runs with delimited identifiers disabled: the JDBC
+    // preparser turns a quoted column into a `:%qpar` host variable and a
+    // quoted ORDER BY name into a string literal (constant sort), so ordinary
+    // column names must stay unquoted (#8340).
+    assert_eq!(
+        build_table_select_sql(TableSelectSqlOptions {
+            database_type: Some(DatabaseType::Iris),
+            schema: Some("SQLUser"),
+            table_name: "CT_Country",
+            columns: &columns,
+            order_columns: &keys,
+            limit: 200,
+        }),
+        "SELECT TOP 200 id, name FROM SQLUser.CT_Country ORDER BY id ASC"
+    );
+    // Non-Iris dialects keep their own quoting for the same input.
+    assert_eq!(
+        build_table_select_sql(TableSelectSqlOptions {
+            database_type: Some(DatabaseType::Mysql),
+            schema: None,
+            table_name: "users",
+            columns: &columns,
+            order_columns: &keys,
+            limit: 100,
+        }),
+        "SELECT `id`, `name` FROM `users` ORDER BY `id` ASC LIMIT 100;"
+    );
     assert_eq!(
         build_table_select_sql(TableSelectSqlOptions {
             database_type: Some(DatabaseType::Iotdb),
