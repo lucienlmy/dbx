@@ -31,7 +31,6 @@ import {
   Pencil,
   Filter,
   SquareDashed,
-  Check,
   CopyPlus,
   Hash,
   KeyRound,
@@ -80,6 +79,7 @@ import DataGridFilterBuilder from "@/components/grid/DataGridFilterBuilder.vue";
 import DataGridFilterWorkbench from "@/components/grid/DataGridFilterWorkbench.vue";
 import DataGridTextFilterWorkbench from "@/components/grid/DataGridTextFilterWorkbench.vue";
 import DataGridTableInfoPanels from "@/components/grid/DataGridTableInfoPanels.vue";
+import DataGridColumnFilterPopover from "@/components/grid/DataGridColumnFilterPopover.vue";
 import TemporalCellEditor from "@/components/grid/TemporalCellEditor.vue";
 import EnumCellEditor from "@/components/grid/EnumCellEditor.vue";
 import DataGridReadonlyTextSelection from "@/components/grid/DataGridReadonlyTextSelection.vue";
@@ -13027,118 +13027,37 @@ function openGridSnapshot() {
                             </div>
                           </PopoverContent>
                         </Popover>
-                        <Popover :open="localFilterOpenColumn === col.actualColIdx" @update:open="(value: boolean) => handleLocalFilterOpenChange(value, col.actualColIdx)">
-                          <PopoverAnchor v-if="compactColumnHeaderActions" as-child>
-                            <span class="pointer-events-none absolute right-3 top-1/2 h-px w-px -translate-y-1/2" />
-                          </PopoverAnchor>
-                          <PopoverTrigger v-else as-child>
-                            <button
-                              type="button"
-                              class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-foreground"
-                              :class="localFilterActive(col.actualColIdx) ? 'text-primary opacity-100' : 'opacity-80'"
-                              :title="t('grid.localFilter')"
-                              @click.stop
-                            >
-                              <Filter class="h-3.5 w-3.5" />
-                            </button>
-                          </PopoverTrigger>
-                          <PopoverContent
-                            align="start"
-                            side="bottom"
-                            class="relative max-w-[calc(100vw-2rem)] gap-0 overflow-hidden rounded-md border bg-popover p-0 text-popover-foreground shadow-xl"
-                            :style="{ width: `${localFilterPopoverWidth}px`, marginLeft: `${localFilterPopoverOffsetX}px` }"
-                            @click.stop
-                            @keydown.stop
-                          >
-                            <div role="separator" aria-orientation="vertical" aria-label="Resize filter panel" class="absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-primary/30" @mousedown.stop="onLocalFilterResizeStart($event, 'left')" />
-                            <div role="separator" aria-orientation="vertical" aria-label="Resize filter panel" class="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-primary/30" @mousedown.stop="onLocalFilterResizeStart($event, 'right')" />
-                            <div class="border-b bg-muted/40 px-2 py-1.5 text-center text-xs font-semibold">
-                              {{ columnFilterPanelTitle(col.name) }}
-                            </div>
-                            <div class="flex items-center gap-1.5 border-b px-2 py-1.5">
-                              <Search class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                              <input v-model="localFilterSearch" autocapitalize="off" autocorrect="off" spellcheck="false" class="h-7 min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground" :placeholder="t('grid.searchValues')" />
-                            </div>
-                            <div class="grid grid-cols-[1.75rem_minmax(0,1fr)_3.5rem] border-b bg-muted/40 px-2 py-1 text-xs font-medium text-muted-foreground">
-                              <button type="button" class="flex h-4 w-4 items-center justify-center rounded border" :class="localFilterAllVisibleSelected ? 'border-blue-600 bg-blue-600 text-white' : 'border-border bg-background text-foreground/70'" @click="toggleAllLocalFilterOptions">
-                                <Check v-if="localFilterAllVisibleSelected" class="h-3 w-3 stroke-[3]" />
-                              </button>
-                              <span>{{ t("grid.value") }}</span>
-                              <span class="text-right">{{ t("grid.count") }}</span>
-                            </div>
-                            <div v-if="localFilterDraft?.mode === 'server' && (serverFilterLoading || serverFilterError || serverFilterLimited)" class="flex items-center gap-1.5 border-b px-2 py-1 text-[11px] text-muted-foreground">
-                              <Loader2 v-if="serverFilterLoading" class="h-3 w-3 animate-spin" />
-                              <span class="min-w-0 truncate">
-                                <template v-if="serverFilterLoading">{{ t("grid.loadingValues") }}</template>
-                                <template v-else-if="serverFilterError">{{ serverFilterError }}</template>
-                                <template v-else>{{
-                                  t("grid.serverValuesLimited", {
-                                    count: SERVER_COLUMN_FILTER_LIMIT,
-                                  })
-                                }}</template>
-                              </span>
-                            </div>
-                            <div class="max-h-72 overflow-auto py-0.5">
-                              <button v-for="option in localFilterOptions" :key="option.key" type="button" class="grid w-full grid-cols-[1.75rem_minmax(0,1fr)_3.5rem] items-center px-2 py-1 text-left text-xs hover:bg-accent" @click="toggleLocalFilterValue(option.key)">
-                                <span class="flex h-4 w-4 items-center justify-center rounded border" :class="localFilterDraft?.values.has(option.key) ? 'border-blue-600 bg-blue-600 text-white' : 'border-border bg-background text-foreground/70'">
-                                  <Check v-if="localFilterDraft?.values.has(option.key)" class="h-3 w-3 stroke-[3]" />
-                                </span>
-                                <span
-                                  class="truncate font-mono"
-                                  :class="{
-                                    'italic text-muted-foreground': option.value === null,
-                                  }"
-                                >
-                                  {{ option.label }}
-                                </span>
-                                <span class="text-right tabular-nums text-muted-foreground text-xs">{{ option.count ?? "" }}</span>
-                              </button>
-                              <div v-if="localFilterDraft?.mode === 'local' && localFilterAllOptions.length > localFilterOptions.length" class="px-2 py-0.5 text-center text-[10px] text-muted-foreground">
-                                {{
-                                  t("grid.moreValues", {
-                                    count: localFilterAllOptions.length - localFilterOptions.length,
-                                  })
-                                }}
-                              </div>
-                              <button v-if="canApplyTypedLocalFilterValue" type="button" class="grid w-full grid-cols-[1.75rem_minmax(0,1fr)] items-center px-2 py-1 text-left text-xs text-primary hover:bg-accent" @click="applyTypedLocalFilterValue">
-                                <Search class="h-3.5 w-3.5" />
-                                <span class="truncate font-mono">
-                                  {{
-                                    t("grid.filterTypedValue", {
-                                      value: localFilterTypedValue,
-                                    })
-                                  }}
-                                </span>
-                              </button>
-                              <div v-if="localFilterOptions.length === 0 && !canApplyTypedLocalFilterValue && !serverFilterLoading" class="px-2 py-6 text-center text-xs text-muted-foreground">
-                                {{ t("grid.noSearchResults") }}
-                              </div>
-                            </div>
-                            <div class="flex items-center justify-between gap-2 border-t bg-muted/40 px-2 py-1.5">
-                              <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" @click="clearLocalFilter(col.actualColIdx)">
-                                {{ t("grid.clearFilter") }}
-                              </Button>
-                              <div class="flex items-center gap-2">
-                                <Button variant="outline" size="sm" class="h-7 px-2 text-xs" @click="closeLocalFilter">
-                                  {{ t("dangerDialog.cancel") }}
-                                </Button>
-                                <Button size="sm" class="h-7 px-2 text-xs" @click="applyLocalFilter">
-                                  {{ t("grid.applyFilter") }}
-                                </Button>
-                              </div>
-                            </div>
-                          </PopoverContent>
-                        </Popover>
-                        <button
-                          v-if="!compactColumnHeaderActions && canUseServerColumnFilter"
-                          type="button"
-                          class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-gray-200 dark:hover:bg-gray-800 hover:text-foreground"
-                          :class="localFilterOpenColumn === col.actualColIdx && localFilterDraft?.mode === 'server' ? 'text-primary opacity-100' : 'opacity-80'"
-                          :title="t('grid.databaseValueFilter')"
-                          @click.stop="openLocalFilter(col.actualColIdx, 'server')"
-                        >
-                          <Database class="h-3.5 w-3.5" />
-                        </button>
+                        <DataGridColumnFilterPopover
+                          :open="localFilterOpenColumn === col.actualColIdx"
+                          :compact-header-actions="compactColumnHeaderActions"
+                          :can-use-server-filter="canUseServerColumnFilter"
+                          :active="localFilterActive(col.actualColIdx)"
+                          :server-mode-active="localFilterOpenColumn === col.actualColIdx && localFilterDraft?.mode === 'server'"
+                          :panel-title="columnFilterPanelTitle(col.name)"
+                          :search="localFilterSearch"
+                          :popover-width="localFilterPopoverWidth"
+                          :popover-offset-x="localFilterPopoverOffsetX"
+                          :draft-mode="localFilterDraft?.mode"
+                          :draft-values="localFilterDraft?.values"
+                          :options="localFilterOptions"
+                          :all-options-count="localFilterAllOptions.length"
+                          :can-apply-typed-value="canApplyTypedLocalFilterValue"
+                          :typed-value="localFilterTypedValue"
+                          :server-loading="serverFilterLoading"
+                          :server-error="serverFilterError"
+                          :server-limited="serverFilterLimited"
+                          :server-value-limit="SERVER_COLUMN_FILTER_LIMIT"
+                          @update:open="(value) => handleLocalFilterOpenChange(value, col.actualColIdx)"
+                          @update:search="localFilterSearch = $event"
+                          @resize-start="onLocalFilterResizeStart"
+                          @toggle-all="toggleAllLocalFilterOptions"
+                          @toggle-value="toggleLocalFilterValue"
+                          @apply-typed-value="applyTypedLocalFilterValue"
+                          @clear="() => clearLocalFilter(col.actualColIdx)"
+                          @close="closeLocalFilter"
+                          @apply="applyLocalFilter"
+                          @open-server-filter="openLocalFilter(col.actualColIdx, 'server')"
+                        />
                       </span>
                     </template>
                   </DataGridColumnHeader>
