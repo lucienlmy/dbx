@@ -612,6 +612,81 @@ describe("queryStore hidden primary key editing", () => {
     expect(tab.queryEditabilityReason).toBeUndefined();
   }, 10_000);
 
+  it.each([
+    {
+      connection: { id: "oracle-1", name: "Oracle", db_type: "oracle", database: "XE", query_timeout_secs: 30 },
+      label: "native Oracle",
+    },
+    {
+      connection: { id: "oracle-jdbc-1", name: "Oracle JDBC", db_type: "jdbc", connection_string: "jdbc:oracle:thin:@//localhost:1521/XE", database: "XE", query_timeout_secs: 30 },
+      label: "Oracle-inferred JDBC",
+    },
+  ])("edits an unqualified lowercase query through the folded current-schema table for $label", async ({ connection }) => {
+    getConnectionConfig.mockReturnValue(connection);
+    getColumns.mockResolvedValue([
+      { name: "ID", data_type: "NUMBER", is_nullable: false, column_default: null, is_primary_key: true, extra: null },
+      { name: "NAME", data_type: "VARCHAR2(100)", is_nullable: true, column_default: null, is_primary_key: false, extra: null },
+    ]);
+    listIndexes.mockResolvedValue([]);
+    analyzeEditableQueryEditability.mockResolvedValue({
+      editable: true,
+      analysis: {
+        schema: undefined,
+        tableName: "imp_t",
+        selectStar: true,
+        columns: [],
+      },
+    });
+    executeMulti.mockResolvedValue([{ columns: ["ID", "NAME"], rows: [[1, "Alice"]], affected_rows: 0, execution_time_ms: 1 }]);
+
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+    const tabId = store.createTab(connection.id, "XE", "Query");
+    store.setAutoCommit(tabId, true);
+
+    await store.executeTabSql(tabId, "select * from imp_t");
+
+    // The service name must not leak into the metadata schema, and the stored
+    // table spelling has to fold to uppercase so the generated UPDATE quotes
+    // the object Oracle actually resolved for the unqualified SELECT.
+    expect(getColumns).toHaveBeenCalledWith(connection.id, "XE", "", "IMP_T", undefined);
+    const tab = store.tabs.find((item) => item.id === tabId)!;
+    await vi.waitFor(() => expect(tab.tableMeta?.tableName).toBe("IMP_T"));
+    expect(tab.tableMeta?.schema).toBeUndefined();
+    expect(tab.queryEditabilityReason).toBeUndefined();
+  });
+
+  it("keeps an unqualified lowercase MySQL JDBC query on its unfolded table name", async () => {
+    getConnectionConfig.mockReturnValue({ id: "jdbc-mysql-1", name: "MySQL JDBC", db_type: "jdbc", connection_string: "jdbc:mysql://localhost:3306/app", database: "app", query_timeout_secs: 30 });
+    getColumns.mockResolvedValue([
+      { name: "id", data_type: "int", is_nullable: false, column_default: null, is_primary_key: true, extra: null },
+      { name: "name", data_type: "varchar(64)", is_nullable: true, column_default: null, is_primary_key: false, extra: null },
+    ]);
+    analyzeEditableQueryEditability.mockResolvedValue({
+      editable: true,
+      analysis: {
+        schema: undefined,
+        tableName: "users",
+        selectStar: true,
+        columns: [],
+      },
+    });
+    executeMulti.mockResolvedValue([{ columns: ["id", "name"], rows: [[1, "Alice"]], affected_rows: 0, execution_time_ms: 1 }]);
+
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+    const tabId = store.createTab("jdbc-mysql-1", "app", "Query");
+    store.setAutoCommit(tabId, true);
+
+    await store.executeTabSql(tabId, "select * from users");
+
+    expect(getColumns).toHaveBeenCalledWith("jdbc-mysql-1", "app", "", "users", undefined);
+    const tab = store.tabs.find((item) => item.id === tabId)!;
+    await vi.waitFor(() => expect(tab.tableMeta?.tableName).toBe("users"));
+    expect(tab.tableMeta?.schema).toBeUndefined();
+    expect(tab.queryEditabilityReason).toBeUndefined();
+  });
+
   it("uses the configured current schema to keep an unqualified Oracle base-table query editable", async () => {
     getConnectionConfig.mockReturnValue({ id: "oracle-1", name: "Oracle", db_type: "oracle", database: "ORCL", default_schema: "APP", query_timeout_secs: 30 });
     getColumns.mockResolvedValue([

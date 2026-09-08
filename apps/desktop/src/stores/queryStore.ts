@@ -4684,6 +4684,12 @@ export const useQueryStore = defineStore("query", () => {
   }
 
   function resolveEditableSourceMetadataTarget(tab: QueryTab, analysis: EditableQueryInfo, source: EditableQuerySource, conn: ConnectionConfig | undefined, dbType: string, executionDatabase: string): EditableSourceMetadataTarget {
+    // Oracle-family metadata rules (schema-less resolution + uppercase folding)
+    // must follow the connection's effective database type. Callers built from
+    // the raw connection db_type pass "jdbc" for a JDBC Oracle connection,
+    // which would keep the service-name schema fallback and the query's
+    // lowercase table spelling, so the write targets a non-existent table.
+    const metadataDbType = effectiveDatabaseTypeForConnection(conn) || dbType;
     // Metadata must resolve in the same namespace as the query execution. An
     // empty query-tab database still executes in the connection's default DB,
     // while database-tree dialects and SQL Server 3-part names may override it
@@ -4707,10 +4713,10 @@ export const useQueryStore = defineStore("query", () => {
     // connection's search_path. Keep the metadata request unqualified when no
     // schema was selected instead of assuming public (or the database name).
     const useCurrentPostgresSchema = (dbType === "postgres" || dbType === "kwdb") && !source.schema && !tab.schema;
-    const resolvedSchema = (dbType === "sqlserver" && !source.schema) || (ORACLE_LIKE_METADATA_TYPES.has(dbType) && !schema) || resolveAgentSearchPathSchema || useCurrentPostgresSchema ? "" : metadataSchemaForConnection(conn, metadataDatabase, schema || undefined);
-    const metadataSchema = normalizeUppercaseFoldedMetadataIdentifier(dbType, resolvedSchema || undefined, source.schema ? source.schemaQuoted : false) || "";
-    const metadataTableName = normalizeUppercaseFoldedMetadataIdentifier(dbType, source.tableName, source.tableNameQuoted)!;
-    const metadataCatalog = normalizeUppercaseFoldedMetadataIdentifier(dbType, source.catalog, source.catalogQuoted);
+    const resolvedSchema = (dbType === "sqlserver" && !source.schema) || (ORACLE_LIKE_METADATA_TYPES.has(metadataDbType) && !schema) || resolveAgentSearchPathSchema || useCurrentPostgresSchema ? "" : metadataSchemaForConnection(conn, metadataDatabase, schema || undefined);
+    const metadataSchema = normalizeUppercaseFoldedMetadataIdentifier(metadataDbType, resolvedSchema || undefined, source.schema ? source.schemaQuoted : false) || "";
+    const metadataTableName = normalizeUppercaseFoldedMetadataIdentifier(metadataDbType, source.tableName, source.tableNameQuoted)!;
+    const metadataCatalog = normalizeUppercaseFoldedMetadataIdentifier(metadataDbType, source.catalog, source.catalogQuoted);
     const metadataSource: EditableQuerySource = {
       ...source,
       catalog: metadataCatalog,
@@ -4723,7 +4729,7 @@ export const useQueryStore = defineStore("query", () => {
     const knownTableType = tab.tableMeta?.tableName.toLowerCase() === metadataTableName.toLowerCase() && normalizeOptionalSchema(tab.tableMeta.schema) === normalizeOptionalSchema(metadataSchema) ? tab.tableMeta.tableType : undefined;
     return {
       source: metadataSource,
-      analysis: normalizeUppercaseFoldedQueryAnalysis(dbType, cloneAnalysisForSource(analysis, metadataSource), metadataSchema || undefined, metadataTableName),
+      analysis: normalizeUppercaseFoldedQueryAnalysis(metadataDbType, cloneAnalysisForSource(analysis, metadataSource), metadataSchema || undefined, metadataTableName),
       writeSchema,
       request: {
         connectionId: tab.connectionId!,

@@ -6714,6 +6714,34 @@ mod tests {
     }
 
     #[test]
+    fn prepares_oracle_update_without_schema_when_the_frontend_resolved_the_current_schema() {
+        // A JDBC Oracle edit resolves the login user's schema on the frontend and
+        // sends the folded table name with an empty schema. The generated UPDATE
+        // must stay unqualified instead of reintroducing the service name.
+        let result = prepare_data_grid_save(DataGridSaveStatementOptions {
+            database_type: Some(DatabaseType::Oracle),
+            identifier_quote: None,
+            table_meta: DataGridTableMeta {
+                catalog: None,
+                database: None,
+                schema: None,
+                table_name: "IMP_T".to_string(),
+                primary_keys: vec!["ID".to_string()],
+                columns: Some(vec![column("ID", "NUMBER", false, None), column("NAME", "VARCHAR2(100)", true, None)]),
+            },
+            columns: vec!["ID".to_string(), "NAME".to_string()],
+            source_columns: None,
+            rows: vec![vec![json!(7), json!("old")]],
+            dirty_rows: vec![(0, vec![(1, json!("new"))])],
+            deleted_rows: vec![],
+            new_rows: vec![],
+        });
+
+        assert_eq!(result.validation_error, None);
+        assert_eq!(result.statements, vec!["UPDATE \"IMP_T\" SET \"NAME\" = 'new' WHERE \"ID\" = 7;"]);
+    }
+
+    #[test]
     fn oracle_raw_literals_require_valid_even_length_hex() {
         let raw = column("ID", "RAW(16)", false, None);
         let text = column("ID", "VARCHAR2(64)", false, None);
