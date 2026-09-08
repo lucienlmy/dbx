@@ -214,6 +214,34 @@ describe("useDataGridActions", () => {
     expect(tab.orderByInput).toBe('"name" DESC');
   });
 
+  it("preserves a restored data tab's source database when rebuilding stale metadata", async () => {
+    mocks.getConfig.mockReturnValue({ id: "dameng-1", db_type: "dameng" });
+    const tab = tableDataTab({
+      connectionId: "dameng-1",
+      database: "SERVICE_DB",
+      schema: "APP_OWNER",
+      title: "ORDERS",
+      sql: "SELECT * FROM APP_OWNER.ORDERS",
+      tableMetaUpdatedAt: undefined,
+      tableMeta: {
+        database: "APP_OWNER",
+        schema: "APP_OWNER",
+        tableName: "ORDERS",
+        tableType: "TABLE",
+        columns: [{ name: "ID", data_type: "INTEGER", is_nullable: false, column_default: null, is_primary_key: true, extra: null }],
+        primaryKeys: ["ID"],
+      },
+    });
+    mocks.tabs.push(tab);
+    const actions = useDataGridActions(computed(() => tab));
+
+    await actions.onReloadData(tab.id, undefined, undefined, "", "");
+
+    expect(mocks.getColumns).toHaveBeenCalledWith("dameng-1", "APP_OWNER", "APP_OWNER", "ORDERS", undefined);
+    expect(mocks.setTableMeta).toHaveBeenCalledWith("tab-1", expect.objectContaining({ database: "APP_OWNER", schema: "APP_OWNER", tableName: "ORDERS" }));
+    expect(mocks.buildTableSelectSql).toHaveBeenCalledWith(expect.objectContaining({ database: "APP_OWNER", schema: "APP_OWNER", tableName: "ORDERS" }));
+  });
+
   it("still clears the stored filter when a mounted grid refreshes with an emptied WHERE input", async () => {
     // 对照：DataGrid 的 currentWhereInput() 在用户清空筛选时返回 undefined，
     // 所以 onReloadData 里不能无条件回退到 tab.whereInput。

@@ -3873,7 +3873,7 @@ export const useQueryStore = defineStore("query", () => {
         const metadataGenerationAtStart = connectionGeneration;
         const reloadedMetadata = await loadTableMetadata({
           connectionId: tab.connectionId,
-          database: tab.database,
+          database: tableMeta.database ?? tab.database,
           schema: tableMeta.schema,
           tableName: tableMeta.tableName,
           tableType: tableMeta.tableType,
