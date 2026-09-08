@@ -469,10 +469,13 @@ function isTabGroupCollapsed(tab: QueryTab) {
   return collapsedTabGroups.value.has(tabGroupId(tab));
 }
 
+const activeTabGroupId = computed(() => {
+  const activeTab = props.tabs.find((item) => isTabActive(item));
+  return activeTab ? tabGroupId(activeTab) : null;
+});
+
 function isTabGroupActive(tab: QueryTab) {
-  const section = tab.pinned ? sortedPinnedTabs.value : sortedRegularTabs.value;
-  const groupKey = tabGroupKey(tab);
-  return section.some((item) => tabGroupKey(item) === groupKey && isTabActive(item));
+  return activeTabGroupId.value === tabGroupId(tab);
 }
 
 function preserveTabScrollPosition() {
@@ -734,12 +737,17 @@ const filteredRegularTabs = computed(() => {
 function buildStripEntries(section: QueryTab[], pinned: boolean): StripEntry[] {
   const entries: StripEntry[] = [];
   const grouping = settingsStore.editorSettings.tabGroupMode !== "none";
+  const groupKeys = grouping ? section.map(tabGroupKey) : [];
+  const groupCounts = new Map<string, number>();
+  for (const groupKey of groupKeys) {
+    groupCounts.set(groupKey, (groupCounts.get(groupKey) ?? 0) + 1);
+  }
   section.forEach((tab, index) => {
-    const first = grouping && (index === 0 || tabGroupKey(section[index - 1]!) !== tabGroupKey(tab));
-    const last = grouping && (index === section.length - 1 || tabGroupKey(section[index + 1]!) !== tabGroupKey(tab));
+    const groupKey = groupKeys[index];
+    const first = grouping && (index === 0 || groupKeys[index - 1] !== groupKey);
+    const last = grouping && (index === section.length - 1 || groupKeys[index + 1] !== groupKey);
     if (first) {
-      const groupKey = tabGroupKey(tab);
-      entries.push({ kind: "header", key: `header:${tab.id}`, tab, pinned, count: section.filter((item) => tabGroupKey(item) === groupKey).length });
+      entries.push({ kind: "header", key: `header:${tab.id}`, tab, pinned, count: groupCounts.get(groupKey!) ?? 0 });
     }
     entries.push({ kind: "tab", key: tab.id, tab, groupFirst: first, groupLast: last, grouping });
   });

@@ -34,6 +34,20 @@ describe("EditorGroupTabBar semantic tab groups", () => {
     expect(source).toContain(':aria-expanded="!isTabGroupCollapsed(entry.tab)"');
   });
 
+  it("counts group entries in linear time instead of rescanning the section", () => {
+    const builder = sourceBetween("function buildStripEntries", "const pinnedStripEntries");
+    expect(builder).toContain("const groupKeys = grouping ? section.map(tabGroupKey) : [];");
+    expect(builder).toContain("const groupCounts = new Map<string, number>();");
+    expect(builder).toContain("groupCounts.get(groupKey!) ?? 0");
+    expect(builder).not.toContain("section.filter(");
+  });
+
+  it("computes the active group once instead of scanning every group", () => {
+    const activeGroup = sourceBetween("const activeTabGroupId", "function isTabGroupActive");
+    expect(activeGroup).toContain("const activeTab = props.tabs.find((item) => isTabActive(item));");
+    expect(source).toContain("return activeTabGroupId.value === tabGroupId(tab);");
+  });
+
   it("expands a collapsed group when one of its tabs becomes active", () => {
     expect(source).toContain("expandTabGroupForTab(tabId);");
   });
