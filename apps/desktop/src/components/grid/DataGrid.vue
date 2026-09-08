@@ -84,16 +84,11 @@ import DataGridReadonlyTextSelection from "@/components/grid/DataGridReadonlyTex
 import GridSnapshotDialog from "@/components/grid/GridSnapshotDialog.vue";
 import type { QueryResult, ColumnInfo, ConstraintInfo, DatabaseType, ForeignKeyInfo, IndexInfo, TriggerInfo, TableInfoTab, QueryResultSourceColumnRef, QueryPageJumpProgress } from "@/types/database";
 import { isQueryExecutionErrorResult } from "@/lib/query/queryResultError";
-import { tableObjectSourceKind } from "@/lib/table/tableObjectSourceKind";
 import { tableColumnDefaultDisplayValue } from "@/lib/table/tableColumnDefaultPresentation";
 import { shouldNavigateFromTableInfoColumnClick } from "@/lib/table/tableInfoColumnNavigation";
 import { tableInfoTabForDrawerToggle } from "@/lib/table/tableInfoTabPreference";
-import { loadObjectDdl } from "@/lib/metadata/objectDdlCache";
-import { loadObjectMetadataFacet } from "@/lib/metadata/objectMetadataCache";
 import * as api from "@/lib/backend/api";
 import { formatElapsedSeconds } from "@/lib/common/elapsedTime";
-import { sqlFormatDialectForDbType } from "@/lib/sql/sqlFormatter";
-import { omitDdlIdentifierQuotes } from "@/lib/sql/ddlDisplay";
 import type { SqlInsertMode } from "@/lib/export/sqlInsertMode";
 import { dataGridCellDisplayText, dataGridCellEditorText } from "@/lib/dataGrid/dataGridCellCoercion";
 import { createColumnDrafts } from "@/lib/table/tableStructureEditorState";
@@ -283,7 +278,7 @@ import {
   dataGridSelectedSortMenuValue,
   type DataGridColumnSortState,
 } from "@/lib/dataGrid/dataGridContextMenu";
-import { buildColumnForeignKeyMap, combineForeignKeyConditions, foreignKeyAssociationCells, foreignKeyMetadataRequestCurrent, foreignKeyNavigationTarget, foreignKeySourceColumnName, foreignKeyTableIdentity, type ForeignKeyAssociation } from "@/lib/dataGrid/dataGridForeignKeyNavigation";
+import { buildColumnForeignKeyMap, combineForeignKeyConditions, foreignKeyAssociationCells, foreignKeyNavigationTarget, foreignKeySourceColumnName, type ForeignKeyAssociation } from "@/lib/dataGrid/dataGridForeignKeyNavigation";
 import {
   collectForeignKeyDisplayValues,
   createForeignKeyDisplayRequestCoordinator,
@@ -354,13 +349,12 @@ import { constraintsForConstraintsTab } from "@/lib/table/constraintPresentation
 import { filterObjectBrowserTableColumns } from "@/lib/table/objectBrowserTableInfo";
 import { gaussdbMTypeDisplayName } from "@/lib/table/postgresDataTypeHelp";
 import { reserveDataGridHeaderLine } from "@/lib/dataGrid/dataGridHeaderLayout";
-import { buildColumnIndexMap, columnIndexColorClass, columnIndexMetadataRequestCurrent, columnIndexNameKey, columnIndexTableIdentity, type ColumnIndexKind } from "@/lib/dataGrid/dataGridColumnIndexIcon";
+import { buildColumnIndexMap, columnIndexColorClass, columnIndexNameKey, type ColumnIndexKind } from "@/lib/dataGrid/dataGridColumnIndexIcon";
 import { supportsTableStructureEditing } from "@/lib/database/databaseCapabilities";
 import { rememberDataGridConditionHistory } from "@/lib/dataGrid/dataGridConditionHistory";
 import { buildDataGridLocalFilterOptions, dataGridLocalFilterKey, dataGridLocalFilterLabel, restoreDataGridLocalColumnFilters, rowMatchesDataGridLocalColumnFilters, serializeDataGridLocalColumnFilters, type DataGridLocalFilterOption } from "@/lib/dataGrid/dataGridLocalColumnFilterState";
 import { effectiveDatabaseTypeForConnection, gaussdbCountQueryDopHint } from "@/lib/database/jdbcDialect";
 import { mongoCollectionSupportsIndexes, supportsMongoIndexMutations } from "@/lib/mongo/mongoCapabilities";
-import { refreshLoadedMongoIndexes } from "@/lib/mongo/mongoIndexMetadata";
 import { isProtectedMongoIndex, mongoDropAllIndexesPreview, mongoDropIndexFailureCount, mongoDropIndexPreview } from "@/lib/sidebar/mongoCollectionMutation";
 import { runMongoMutation } from "@/lib/sidebar/runMongoSidebarMutation";
 import { dataGridConditionColumnOptions, dataGridConditionIdentifierQuote, dataGridFilterColumns } from "@/lib/dataGrid/dataGridConditionCompletion";
@@ -370,6 +364,7 @@ import { formatShortcut } from "@/lib/editor/shortcutRegistry";
 import { queryTimeoutSecsForConnection } from "@/lib/sql/queryTimeout";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useDataGridColumnFormatter } from "@/composables/useDataGridColumnFormatter";
+import { useDataGridTableMetadataLoaders } from "@/composables/useDataGridTableMetadataLoaders";
 
 const SqlPreviewPanel = defineAsyncComponent(() => import("@/components/editor/SqlPreviewPanel.vue"));
 const ImagePreviewDialog = defineAsyncComponent(() => import("@/components/grid/ImagePreviewDialog.vue"));
@@ -401,6 +396,11 @@ const booleanDisplayMode = computed(() => settingsStore.editorSettings.dataGridB
 const colorizeDataGridCellTypes = computed(() => settingsStore.editorSettings.colorizeDataGridCellTypes);
 const { isDark, themePalette } = useTheme();
 const { toast } = useToast();
+let tableMetadataLoaderFetchForeignKeys: () => Promise<void> = async () => {};
+
+function fetchForeignKeys() {
+  return tableMetadataLoaderFetchForeignKeys();
+}
 // 外键单元格跳转复用导航入口；对话框引用传 stub（同 AiAssistant 模式）
 const { openTableTarget } = useNavigationTargets({
   showFieldLineageDialog: ref(false),
@@ -10544,41 +10544,15 @@ const tableInfoDrawerPinned = computed(() => settingsStore.editorSettings.tableI
 const ddlContent = ref("");
 const tableInfoColumns = ref<ColumnInfo[]>(props.tableMeta?.columns ?? []);
 const tableInfoColumnsLoading = ref(false);
-let tableInfoColumnsRequestGeneration = 0;
+const tableInfoColumnsRequestGeneration = ref(0);
 const ddlPreRef = ref<HTMLPreElement | null>(null);
 const ddlSearchMatchCount = ref(0);
 const ddlSearchMatchIndex = ref(0);
 const tableOwner = ref<string | null>(null);
 const tableOwnerLoading = ref(false);
 const tableOwnerError = ref("");
-let tableOwnerRequestGeneration = 0;
+const tableOwnerRequestGeneration = ref(0);
 const canShowTableOwner = computed(() => resolvedDatabaseType.value === "postgres" && !!props.connectionId && !!props.database && !!props.tableMeta?.schema && !!props.tableMeta?.tableName);
-
-async function fetchTableOwner(force = false) {
-  if (!canShowTableOwner.value || !props.connectionId || !props.database || !props.tableMeta?.schema || !props.tableMeta.tableName) return;
-  const requestGeneration = ++tableOwnerRequestGeneration;
-  const request = {
-    connectionId: props.connectionId,
-    database: props.database,
-    schema: props.tableMeta.schema,
-    tableName: props.tableMeta.tableName,
-    catalog: props.tableMeta.catalog,
-    objectType: tableObjectSourceKind(props.tableMeta.tableType),
-  };
-  tableOwnerLoading.value = true;
-  tableOwnerError.value = "";
-  try {
-    const result = await loadObjectMetadataFacet(request, "owner", () => api.getTableOwner(request.connectionId, request.database, request.schema, request.tableName), { force });
-    if (requestGeneration !== tableOwnerRequestGeneration) return;
-    tableOwner.value = result.value;
-  } catch (error: any) {
-    if (requestGeneration !== tableOwnerRequestGeneration) return;
-    tableOwner.value = null;
-    tableOwnerError.value = error?.message || String(error);
-  } finally {
-    if (requestGeneration === tableOwnerRequestGeneration) tableOwnerLoading.value = false;
-  }
-}
 
 function scrollDdlSearchMatchIntoView(match: HTMLElement) {
   const pre = ddlPreRef.value;
@@ -10652,16 +10626,7 @@ let detailResizeStartY = 0;
 let detailResizeStartHeight = 0;
 let mongoJsonPreviewResizeStartX = 0;
 let mongoJsonPreviewResizeStartWidth = 0;
-const currentIndexTableIdentity = computed(() =>
-  columnIndexTableIdentity({
-    connectionId: props.connectionId,
-    database: props.database,
-    catalog: props.tableMeta?.catalog,
-    schema: props.tableMeta?.schema,
-    tableName: props.tableMeta?.tableName,
-  }),
-);
-let indexesRequestGeneration = 0;
+const indexesRequestGeneration = ref(0);
 const showDropMongoIndexConfirm = ref(false);
 const dropMongoIndexLoading = ref(false);
 const pendingDropMongoIndex = ref<IndexInfo | null>(null);
@@ -10671,16 +10636,7 @@ const foreignKeys = ref<ForeignKeyInfo[]>([]);
 const foreignKeysLoaded = ref(false);
 const foreignKeysLoading = ref(false);
 const foreignKeysError = ref("");
-const currentForeignKeyTableIdentity = computed(() =>
-  foreignKeyTableIdentity({
-    connectionId: props.connectionId,
-    database: props.database,
-    catalog: props.tableMeta?.catalog,
-    schema: props.tableMeta?.schema,
-    tableName: props.tableMeta?.tableName,
-  }),
-);
-let foreignKeysRequestGeneration = 0;
+const foreignKeysRequestGeneration = ref(0);
 const triggers = ref<TriggerInfo[]>([]);
 const triggersLoaded = ref(false);
 const triggersLoading = ref(false);
@@ -10689,16 +10645,7 @@ const constraints = ref<ConstraintInfo[]>([]);
 const constraintsLoaded = ref(false);
 const constraintsLoading = ref(false);
 const constraintsError = ref("");
-const currentConstraintTableIdentity = computed(() =>
-  columnIndexTableIdentity({
-    connectionId: props.connectionId,
-    database: props.database,
-    catalog: props.tableMeta?.catalog,
-    schema: props.tableMeta?.schema,
-    tableName: props.tableMeta?.tableName,
-  }),
-);
-let constraintsRequestGeneration = 0;
+const constraintsRequestGeneration = ref(0);
 // The Constraints tab hides foreign keys when a dedicated Foreign Keys tab is
 // also shown (each constraint appears once; FK navigation stays in that tab).
 const constraintsForTab = computed(() => constraintsForConstraintsTab(constraints.value, tableMetadataCapabilities.value.foreignKeys));
@@ -10810,6 +10757,51 @@ const canOpenTableStructureEditor = computed(() => !!props.connectionId && !!pro
 const mongoConnectionConfig = resolvedConnectionConfig;
 const canManageMongoIndexes = computed(() => resolvedDatabaseType.value === "mongodb" && !!props.connectionId && !!props.database && !!props.tableMeta?.tableName && supportsMongoIndexMutations(mongoConnectionConfig.value, props.tableMeta?.tableType));
 const canShowTableIndexes = computed(() => tableMetadataCapabilities.value.indexes && (resolvedDatabaseType.value !== "mongodb" || mongoCollectionSupportsIndexes(props.tableMeta?.tableType)));
+
+const metadataLoaders = useDataGridTableMetadataLoaders({
+  props,
+  state: {
+    ddlContent,
+    ddlLoading,
+    tableInfoColumns,
+    tableInfoColumnsLoading,
+    tableOwner,
+    tableOwnerLoading,
+    tableOwnerError,
+    indexes,
+    indexesLoaded,
+    indexesLoading,
+    indexesError,
+    foreignKeys,
+    foreignKeysLoaded,
+    foreignKeysLoading,
+    foreignKeysError,
+    triggers,
+    triggersLoaded,
+    triggersLoading,
+    triggersError,
+    constraints,
+    constraintsLoaded,
+    constraintsLoading,
+    constraintsError,
+    tableInfoColumnsRequestGeneration,
+    tableOwnerRequestGeneration,
+    indexesRequestGeneration,
+    foreignKeysRequestGeneration,
+    constraintsRequestGeneration,
+  },
+  settingsStore,
+  connectionStore,
+  resolvedDatabaseType,
+  canShowTableIndexes,
+  showTableInfo,
+  toast,
+  formatBackendError: (error) => translateBackendError(t, error),
+  toastMongoIndexRefreshError: (message) => toast(t("contextMenu.mongoIndexRefreshFailed", { message }), 5000),
+});
+
+const { fetchDdl, fetchTableInfoColumns, fetchTableOwner, currentIndexTableIdentity, fetchIndexes, refreshMongoIndexMetadataAfterMutation, currentForeignKeyTableIdentity, fetchForeignKeys: fetchForeignKeysMetadata, fetchTriggers, fetchConstraints } = metadataLoaders;
+tableMetadataLoaderFetchForeignKeys = fetchForeignKeysMetadata;
 const tableInfoTabs = computed(() => {
   const tabs: TableInfoTabItem[] = [];
   if (tableMetadataCapabilities.value.ddl) {
@@ -10908,58 +10900,6 @@ watch(
   { immediate: true },
 );
 
-async function fetchDdl(force = settingsStore.editorSettings.refreshDdlOnOpen) {
-  if (!props.connectionId || !props.tableMeta) return;
-  showTableInfo.value = true;
-  ddlLoading.value = true;
-  try {
-    // Preserve view identity so the backend loads the stored view source instead of synthesizing table DDL.
-    const { ddl } = await loadObjectDdl(
-      {
-        connectionId: props.connectionId,
-        database: props.database || "",
-        schema: props.tableMeta.schema || props.database || "",
-        tableName: props.tableMeta.tableName,
-        objectType: tableObjectSourceKind(props.tableMeta.tableType),
-        catalog: props.tableMeta.catalog,
-      },
-      { force },
-    );
-    const formatDialect = sqlFormatDialectForDbType(resolvedDatabaseType.value);
-    ddlContent.value = settingsStore.editorSettings.generateSqlQuoteIdentifiers ? ddl : omitDdlIdentifierQuotes(ddl, formatDialect);
-  } catch (e: any) {
-    ddlContent.value = `-- Error: ${e}`;
-  } finally {
-    ddlLoading.value = false;
-  }
-}
-
-async function fetchTableInfoColumns(force = false) {
-  if (!props.connectionId || !props.tableMeta) return;
-  const requestGeneration = ++tableInfoColumnsRequestGeneration;
-  tableInfoColumnsLoading.value = true;
-  try {
-    // Route through the shared metadata facet cache so a grid-side refresh
-    // invalidates/populates the same cache the sidebar and hover views read.
-    const request = {
-      connectionId: props.connectionId,
-      database: props.database || "",
-      schema: props.tableMeta.schema || props.database || "",
-      tableName: props.tableMeta.tableName,
-      objectType: tableObjectSourceKind(props.tableMeta.tableType),
-      catalog: props.tableMeta.catalog,
-    };
-    const { value: columns } = await loadObjectMetadataFacet(request, "columns", () => api.getColumns(request.connectionId, request.database, request.schema, request.tableName, request.catalog), { force });
-    if (requestGeneration !== tableInfoColumnsRequestGeneration) return;
-    tableInfoColumns.value = columns;
-  } catch (error) {
-    if (requestGeneration !== tableInfoColumnsRequestGeneration) return;
-    toast(translateBackendError(t, error), 5000);
-  } finally {
-    if (requestGeneration === tableInfoColumnsRequestGeneration) tableInfoColumnsLoading.value = false;
-  }
-}
-
 async function refreshActiveTableInfo() {
   if (!showTableInfo.value || !props.tableMeta) return;
   if (canShowTableOwner.value) void fetchTableOwner(true);
@@ -10981,212 +10921,27 @@ async function refreshActiveTableInfo() {
   }
 }
 
-async function fetchIndexes() {
-  const requestIdentity = currentIndexTableIdentity.value;
-  if (!props.connectionId || !props.tableMeta || !canShowTableIndexes.value || !requestIdentity || indexesLoaded.value || indexesLoading.value) return;
-  const connectionId = props.connectionId;
-  const database = props.database || "";
-  const schema = props.tableMeta.schema || props.database || "";
-  const tableName = props.tableMeta.tableName;
-  const catalog = props.tableMeta.catalog;
-  const requestGeneration = ++indexesRequestGeneration;
-  indexesLoading.value = true;
-  indexesError.value = "";
-  try {
-    const nextIndexes = await api.listIndexes(connectionId, database, schema, tableName, catalog);
-    if (
-      !columnIndexMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: indexesRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentIndexTableIdentity.value,
-      })
-    )
-      return;
-    indexes.value = nextIndexes;
-    indexesLoaded.value = true;
-  } catch (e: any) {
-    if (
-      !columnIndexMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: indexesRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentIndexTableIdentity.value,
-      })
-    )
-      return;
-    indexesError.value = String(e?.message || e);
-  } finally {
-    if (
-      columnIndexMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: indexesRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentIndexTableIdentity.value,
-      })
-    )
-      indexesLoading.value = false;
-  }
-}
-
-async function reloadIndexes() {
-  indexesLoaded.value = false;
-  await fetchIndexes();
-}
-
-async function refreshMongoIndexMetadataAfterMutation() {
-  await reloadIndexes();
-  const connectionId = props.connectionId;
-  const database = props.database;
-  const collection = props.tableMeta?.tableName;
-  if (!connectionId || !database || !collection) return;
-  try {
-    await refreshLoadedMongoIndexes(connectionStore, {
-      connectionId,
-      database,
-      collection,
-    });
-  } catch (e: any) {
-    toast(
-      t("contextMenu.mongoIndexRefreshFailed", {
-        message: String(e?.message || e),
-      }),
-      5000,
-    );
-  }
-}
-
-async function fetchForeignKeys() {
-  const requestIdentity = currentForeignKeyTableIdentity.value;
-  if (!props.connectionId || !props.tableMeta || !requestIdentity || foreignKeysLoaded.value || foreignKeysLoading.value) return;
-  const connectionId = props.connectionId;
-  const database = props.database || "";
-  const schema = props.tableMeta.schema || props.database || "";
-  const tableName = props.tableMeta.tableName;
-  const catalog = props.tableMeta.catalog;
-  const requestGeneration = ++foreignKeysRequestGeneration;
-  foreignKeysLoading.value = true;
-  foreignKeysError.value = "";
-  try {
-    const nextForeignKeys = await api.listForeignKeys(connectionId, database, schema, tableName, catalog);
-    if (
-      !foreignKeyMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: foreignKeysRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentForeignKeyTableIdentity.value,
-      })
-    )
-      return;
-    foreignKeys.value = nextForeignKeys;
-    foreignKeysLoaded.value = true;
-  } catch (e: any) {
-    if (
-      !foreignKeyMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: foreignKeysRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentForeignKeyTableIdentity.value,
-      })
-    )
-      return;
-    foreignKeysError.value = String(e?.message || e);
-  } finally {
-    if (
-      foreignKeyMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: foreignKeysRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentForeignKeyTableIdentity.value,
-      })
-    )
-      foreignKeysLoading.value = false;
-  }
-}
-
-async function fetchTriggers() {
-  if (!props.connectionId || !props.tableMeta || triggersLoaded.value || triggersLoading.value) return;
-  triggersLoading.value = true;
-  triggersError.value = "";
-  try {
-    triggers.value = await api.listTriggers(props.connectionId, props.database || "", props.tableMeta.schema || props.database || "", props.tableMeta.tableName, props.tableMeta.catalog);
-    triggersLoaded.value = true;
-  } catch (e: any) {
-    triggersError.value = String(e?.message || e);
-  } finally {
-    triggersLoading.value = false;
-  }
-}
-
-async function fetchConstraints() {
-  const requestIdentity = currentConstraintTableIdentity.value;
-  if (!props.connectionId || !props.tableMeta || !requestIdentity || constraintsLoaded.value || constraintsLoading.value) return;
-  const connectionId = props.connectionId;
-  const database = props.database || "";
-  const schema = props.tableMeta.schema || props.database || "";
-  const tableName = props.tableMeta.tableName;
-  const catalog = props.tableMeta.catalog;
-  const requestGeneration = ++constraintsRequestGeneration;
-  constraintsLoading.value = true;
-  constraintsError.value = "";
-  try {
-    const nextConstraints = await api.listConstraints(connectionId, database, schema, tableName, catalog);
-    if (
-      !columnIndexMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: constraintsRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentConstraintTableIdentity.value,
-      })
-    )
-      return;
-    constraints.value = nextConstraints;
-    constraintsLoaded.value = true;
-  } catch (e: any) {
-    if (
-      !columnIndexMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: constraintsRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentConstraintTableIdentity.value,
-      })
-    )
-      return;
-    constraintsError.value = String(e?.message || e);
-  } finally {
-    if (
-      columnIndexMetadataRequestCurrent({
-        requestGeneration,
-        currentGeneration: constraintsRequestGeneration,
-        requestIdentity,
-        currentIdentity: currentConstraintTableIdentity.value,
-      })
-    )
-      constraintsLoading.value = false;
-  }
-}
-
 watch(
   () => [props.connectionId, props.database, props.tableMeta?.catalog, props.tableMeta?.schema, props.tableMeta?.tableName],
   () => {
     tableInfoColumns.value = props.tableMeta?.columns ?? [];
     tableInfoColumnsLoading.value = false;
-    tableInfoColumnsRequestGeneration += 1;
+    tableInfoColumnsRequestGeneration.value += 1;
     tableOwner.value = null;
     tableOwnerLoading.value = false;
     tableOwnerError.value = "";
-    tableOwnerRequestGeneration += 1;
+    tableOwnerRequestGeneration.value += 1;
     ddlContent.value = "";
     indexes.value = [];
     indexesLoaded.value = false;
     indexesLoading.value = false;
     indexesError.value = "";
-    indexesRequestGeneration += 1;
+    indexesRequestGeneration.value += 1;
     foreignKeys.value = [];
     foreignKeysLoaded.value = false;
     foreignKeysLoading.value = false;
     foreignKeysError.value = "";
-    foreignKeysRequestGeneration += 1;
+    foreignKeysRequestGeneration.value += 1;
     triggers.value = [];
     triggersLoaded.value = false;
     triggersError.value = "";
@@ -11194,7 +10949,7 @@ watch(
     constraintsLoaded.value = false;
     constraintsLoading.value = false;
     constraintsError.value = "";
-    constraintsRequestGeneration += 1;
+    constraintsRequestGeneration.value += 1;
     // 表身份变更后，主动触发索引加载，确保索引指示器在切换表后立即可见
     if (showIndexIndicatorsInHeader.value && canShowTableIndexes.value && currentIndexTableIdentity.value) {
       void fetchIndexes();
