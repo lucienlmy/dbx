@@ -1469,6 +1469,10 @@ export interface TransferTaskConfig {
   targetTableNameCase: TransferTableNameCase;
   quoteTargetColumnNames: boolean;
   batchSize: number;
+  /** Legacy-compatible rebuild flag; true takes precedence over the saved DML mode. */
+  dropTargetBeforeCreate?: boolean;
+  /** Legacy field only. Saved confirmation is always ignored and reset to false. */
+  dropTargetConfirmed?: boolean;
 }
 
 export interface TransferTask {
