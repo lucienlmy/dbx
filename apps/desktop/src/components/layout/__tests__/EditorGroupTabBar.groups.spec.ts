@@ -320,6 +320,41 @@ describe("EditorGroupTabBar group behavior", () => {
     setActivePinia(pinia);
   });
 
+  it.each((["none", "connection"] as const).flatMap((groupMode) => (["top", "bottom"] as const).flatMap((placement) => (["wrap", "scroll"] as const).map((tabLayout) => ({ groupMode, placement, tabLayout })))))(
+    "preserves classic $placement $tabLayout row heights with $groupMode grouping in both sections",
+    async ({ groupMode, placement, tabLayout }) => {
+      const store = useQueryStore();
+      const settings = useSettingsStore();
+      settings.editorSettings.appLayout = "classic";
+      settings.editorSettings.tabLayout = tabLayout;
+      settings.editorSettings.tabGroupMode = groupMode;
+      settings.editorSettings.tabPlacement = placement;
+      for (let index = 0; index < 8; index += 1) {
+        store.createTab("pg-1", "app", `Query ${index}`, "query");
+      }
+      store.tabs[0]!.pinned = true;
+      const { app, host } = mountBar(store.focusedGroupId, store.tabs.slice(), store.activeTabId, pinia);
+      const styles = document.createElement("style");
+      styles.textContent = `html { font-size: 16px; } .h-full { height: 100%; }\n${sharedStyles}`;
+      document.head.appendChild(styles);
+
+      try {
+        await settle();
+        expect(host.querySelectorAll(".tab-section--horizontal")).toHaveLength(2);
+        const entries = host.querySelectorAll<HTMLElement>(".tab-group-entry");
+        expect(entries).toHaveLength(8);
+        for (const entry of entries) {
+          const row = tabLayout === "wrap" && groupMode !== "none" ? entry.querySelector<HTMLElement>(".tab-group-tab")! : entry;
+          expect(getComputedStyle(row).height).toBe(tabLayout === "wrap" ? "32px" : "100%");
+        }
+      } finally {
+        app.unmount();
+        host.remove();
+        styles.remove();
+      }
+    },
+  );
+
   it("renders one header per connection cluster and collapses it to a count badge", async () => {
     const store = useQueryStore();
     const settings = useSettingsStore();

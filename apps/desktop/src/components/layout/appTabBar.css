@@ -253,7 +253,7 @@
 }
 
 /* 经典布局下 h-full 在 height:auto 容器中失效，改为固定高度 */
-.app-tab-scroll.classic-wrap > div {
+.app-tab-scroll.classic-wrap .tab-group-entry {
   height: 2rem;
 }
 
