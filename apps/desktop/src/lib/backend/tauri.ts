@@ -1030,6 +1030,8 @@ export interface AiChatMessage {
   mentions?: unknown[];
   reasoning?: string;
   kind?: "contextSummary" | "writeSqlConfirmation" | "productionWriteBlocked";
+  /** Set on the assistant message whose generation failed; persisted (mirrors dbx-core `AiChatMessage.failed`). */
+  failed?: boolean;
 }
 
 export interface AiConversation {
