@@ -82,7 +82,7 @@ import TemporalCellEditor from "@/components/grid/TemporalCellEditor.vue";
 import EnumCellEditor from "@/components/grid/EnumCellEditor.vue";
 import DataGridReadonlyTextSelection from "@/components/grid/DataGridReadonlyTextSelection.vue";
 import GridSnapshotDialog from "@/components/grid/GridSnapshotDialog.vue";
-import type { QueryResult, ColumnInfo, ConstraintInfo, DatabaseType, ForeignKeyInfo, IndexInfo, ReferenceKeyInfo, TriggerInfo, TableInfoTab, QueryResultSourceColumnRef, QueryPageJumpProgress } from "@/types/database";
+import type { QueryResult, ColumnInfo, ConstraintInfo, DatabaseType, ForeignKeyInfo, IndexInfo, TriggerInfo, TableInfoTab, QueryResultSourceColumnRef, QueryPageJumpProgress } from "@/types/database";
 import { isQueryExecutionErrorResult } from "@/lib/query/queryResultError";
 import { tableObjectSourceKind } from "@/lib/table/tableObjectSourceKind";
 import { tableColumnDefaultDisplayValue } from "@/lib/table/tableColumnDefaultPresentation";
@@ -179,23 +179,7 @@ import {
   type DataGridCellDetail,
 } from "@/lib/dataGrid/dataGridDetail";
 import { adjacentDataGridDetailIndex, type DataGridDetailNavigationDelta } from "@/lib/dataGrid/dataGridDetailNavigation";
-import {
-  applyColumnFormatter,
-  columnFormatterKeys,
-  defaultIoTDBTimestampFormatter,
-  DataGridDateTimePatterns,
-  displayTimeZoneOption,
-  formatIoTDBTimestampEditorValue,
-  getSupportedTimeZoneOptions,
-  iotdbTimestampFractionDigits,
-  iotdbTimestampPrecision,
-  normalizeColumnFormatter,
-  parseIoTDBTimestampEditorValue,
-  resolveColumnFormatter,
-  type ColumnFormatterConfig,
-  type DateTimeFormatterUnit,
-  type ForeignKeyDisplayFilterConfig,
-} from "@/lib/dataGrid/columnFormatter";
+import { applyColumnFormatter, DataGridDateTimePatterns, displayTimeZoneOption, formatIoTDBTimestampEditorValue, iotdbTimestampFractionDigits, iotdbTimestampPrecision, parseIoTDBTimestampEditorValue, type ColumnFormatterConfig } from "@/lib/dataGrid/columnFormatter";
 import { temporalCellEditorConfig, type TemporalCellEditorConfig } from "@/lib/dataGrid/dataGridTemporalEditor";
 import { BOOLEAN_CELL_EDITOR_VALUES, booleanCellEditorValue, isBooleanCellValue, isBooleanColumnType, isPointInBooleanCheckbox, nextBooleanCellValue, normalizeBooleanCellValue, parseBooleanCellEditorValue } from "@/lib/dataGrid/dataGridBooleanColumn";
 import { resolveDataGridColumnNullability, resolveDataGridColumnsByResultIndex } from "@/lib/dataGrid/dataGridColumnMetadata";
@@ -307,14 +291,10 @@ import {
   foreignKeyDisplayLookupRequestKey,
   foreignKeyDisplayMapFromResult,
   formatForeignKeyDisplayValue,
-  manualReferenceColumnValidation,
   manualReferenceKeyColumnIsUnique,
-  manualReferenceKeyColumns,
-  reconcileManualReferenceColumn,
   singleColumnForeignKey,
   splitForeignKeyDisplayValues,
   type ForeignKeyDisplayConfig,
-  type ManualReferenceMetadataStatus,
 } from "@/lib/dataGrid/dataGridForeignKeyDisplay";
 
 import { useToast } from "@/composables/useToast";
@@ -389,12 +369,7 @@ import { appendDebugLog, isDebugLoggingEnabled } from "@/lib/backend/debugLog";
 import { formatShortcut } from "@/lib/editor/shortcutRegistry";
 import { queryTimeoutSecsForConnection } from "@/lib/sql/queryTimeout";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import timezone from "dayjs/plugin/timezone";
-import utc from "dayjs/plugin/utc";
-import dayjs from "dayjs";
-
-dayjs.extend(utc);
-dayjs.extend(timezone);
+import { useDataGridColumnFormatter } from "@/composables/useDataGridColumnFormatter";
 
 const SqlPreviewPanel = defineAsyncComponent(() => import("@/components/editor/SqlPreviewPanel.vue"));
 const ImagePreviewDialog = defineAsyncComponent(() => import("@/components/grid/ImagePreviewDialog.vue"));
@@ -1223,65 +1198,11 @@ const draftStructuredWhereInput = ref("");
 const filterEditorView = computed(() => settingsStore.editorSettings.dataGridFilterEditorView);
 const structuredFilterCount = computed(() => structuredFilterRules.value.filter((rule) => !rule.disabled && !!rule.columnName && filterModeHasCompleteValue(rule.mode, rule.rawValue, rule.rawEndValue)).length);
 const hasStructuredFilters = computed(() => !!combineWhereInputs(undefined, appliedStructuredWhereInput.value));
-const formatterOpenColumn = ref<number | null>(null);
-type FormatterDraftKind = Exclude<ColumnFormatterConfig["kind"], "custom-ref" | "iotdb-timestamp">;
-const CUSTOM_FORMATTER_NEW = "__new";
-const formatterKind = ref<FormatterDraftKind>("datetime");
-const formatterDateUnit = ref<DateTimeFormatterUnit>("auto");
-const formatterDatetimePattern = ref<string>("YYYY-MM-DD HH:mm:ss");
-const formatterDateTimezone = ref<string>(dayjs.tz.guess() || "UTC");
-const timezoneOptions = getSupportedTimeZoneOptions(Intl as typeof Intl & { supportedValuesOf?: (key: "timeZone") => string[] }, formatterDateTimezone.value);
-const formatterJsonPath = ref("$.user.name");
-const formatterMaskPrefix = ref(4);
-const formatterMaskSuffix = ref(4);
-const formatterCustomId = ref(CUSTOM_FORMATTER_NEW);
-const formatterCustomCapturedDeleteVersion = ref<number>();
-const formatterCustomName = ref("");
-const formatterCustomTemplate = ref("${value}");
-const formatterCustomDeleteOpen = ref(false);
-const formatterCustomDeleteLoading = ref(false);
-const formatterCustomDeleteId = ref("");
-const formatterCustomDeleteName = ref("");
-const formatterForeignKeyRefSchema = ref("");
-const formatterForeignKeyRefTable = ref("");
-const formatterForeignKeyRefColumn = ref("");
-const formatterForeignKeyDisplayColumn = ref("");
-const formatterForeignKeyManual = ref(false);
-const formatterForeignKeySchemas = ref<string[]>([]);
-const formatterForeignKeyTables = ref<string[]>([]);
-const formatterForeignKeyColumns = ref<ColumnInfo[]>([]);
-const formatterForeignKeyReferenceKeys = ref<ReferenceKeyInfo[]>([]);
-const formatterForeignKeyReferenceMetadataStatus = ref<ManualReferenceMetadataStatus>("loading");
-const formatterForeignKeySchemasLoading = ref(false);
-const formatterForeignKeyTablesLoading = ref(false);
-const formatterForeignKeyColumnsLoading = ref(false);
-const formatterForeignKeyTargetError = ref("");
-const formatterForeignKeyColumnsError = ref("");
-const formatterForeignKeyReferenceMetadataError = ref("");
-const formatterForeignKeyFilterEnabled = ref(false);
-const formatterForeignKeyFilterColumn = ref("");
-const formatterForeignKeyFilterMode = ref<DataGridContextFilterMode>("equals");
-const formatterForeignKeyFilterValue = ref("");
-const formatterForeignKeyFilterEndValue = ref("");
-let formatterForeignKeyColumnsRequest = 0;
-let formatterForeignKeyTargetRequest = 0;
 interface ForeignKeyDisplayLabelState {
   keyDataType?: string;
   labels: Map<string, string>;
 }
 
-const formatterForeignKeyReferenceFilter = computed<ForeignKeyDisplayFilterConfig | undefined>(() =>
-  formatterForeignKeyFilterEnabled.value
-    ? {
-        column: formatterForeignKeyFilterColumn.value,
-        mode: formatterForeignKeyFilterMode.value,
-        value: formatterForeignKeyFilterValue.value,
-        endValue: formatterForeignKeyFilterEndValue.value,
-      }
-    : undefined,
-);
-const formatterForeignKeyReferenceColumns = computed(() => (formatterForeignKeyManual.value ? manualReferenceKeyColumns(formatterForeignKeyColumns.value, formatterForeignKeyReferenceKeys.value, formatterForeignKeyReferenceFilter.value) : formatterForeignKeyColumns.value));
-const formatterForeignKeyReferenceValidation = computed(() => manualReferenceColumnValidation(formatterForeignKeyColumns.value, formatterForeignKeyReferenceKeys.value, formatterForeignKeyRefColumn.value, formatterForeignKeyReferenceMetadataStatus.value, formatterForeignKeyReferenceFilter.value));
 const foreignKeyDisplayLabels = shallowRef(new Map<number, ForeignKeyDisplayLabelState>());
 const foreignKeyDisplayRequests = createForeignKeyDisplayRequestCoordinator();
 
@@ -1289,10 +1210,6 @@ function formatForeignKeyCellDisplay(value: CellValue, columnIndex: number): str
   const state = foreignKeyDisplayLabels.value.get(columnIndex);
   return formatForeignKeyDisplayValue(value, state?.labels, state?.keyDataType);
 }
-
-const savedCustomFormatters = computed(() => {
-  return Object.values(settingsStore.editorSettings.customColumnFormatters).sort((a, b) => a.name.localeCompare(b.name));
-});
 
 function localFilterKey(value: CellValue): string {
   return dataGridLocalFilterKey(value);
@@ -1640,303 +1557,6 @@ watch(
   },
 );
 
-function formatterKeysForColumn(columnIndex: number): string[] {
-  const resultColumn = props.result.columns[columnIndex];
-  if (!props.connectionId || !resultColumn) return [];
-  return columnFormatterKeys({
-    connectionId: props.connectionId,
-    database: props.database,
-    schema: props.schema,
-    databaseType: resolvedDatabaseType.value,
-    resultColumn,
-    sourceColumn: props.sourceColumns?.[columnIndex],
-    displaySource: props.queryDisplaySourceColumns?.[columnIndex],
-    tableMeta: props.tableMeta,
-  });
-}
-
-function formatterKeyForColumn(columnIndex: number): string | null {
-  return formatterKeysForColumn(columnIndex)[0] ?? null;
-}
-
-function savedColumnFormatterEntry(columnIndex: number): { key: string; formatter: ColumnFormatterConfig } | undefined {
-  for (const key of formatterKeysForColumn(columnIndex)) {
-    const formatter = settingsStore.editorSettings.columnFormatters[key];
-    if (formatter) return { key, formatter };
-  }
-  return undefined;
-}
-
-function columnFormatter(columnIndex: number): ColumnFormatterConfig | undefined {
-  const columnType = props.result.column_types?.[columnIndex] ?? tableColumnForGridColumn(columnIndex)?.data_type;
-  const savedFormatter = savedColumnFormatterEntry(columnIndex)?.formatter;
-  const configured = resolveColumnFormatter(savedFormatter, settingsStore.editorSettings.customColumnFormatters, {
-    pattern: settingsStore.editorSettings.globalDateTimeDisplayFormat,
-    columnType,
-  });
-  if (savedFormatter && configured) return configured;
-  return defaultIoTDBTimestampFormatter(resolvedDatabaseType.value, columnType, resolvedConnectionConfig.value?.url_params) ?? configured;
-}
-
-function savedColumnFormatter(columnIndex: number): ColumnFormatterConfig | undefined {
-  return savedColumnFormatterEntry(columnIndex)?.formatter;
-}
-
-function columnHasFormatter(columnIndex: number): boolean {
-  return !!columnFormatter(columnIndex);
-}
-
-function currentFormatterDraft(): ColumnFormatterConfig {
-  if (formatterKind.value === "json-path") {
-    return { kind: "json-path", path: formatterJsonPath.value.trim() || "$" };
-  }
-  if (formatterKind.value === "mask") {
-    return {
-      kind: "mask",
-      prefix: Math.max(0, Math.floor(Number(formatterMaskPrefix.value) || 0)),
-      suffix: Math.max(0, Math.floor(Number(formatterMaskSuffix.value) || 0)),
-    };
-  }
-  if (formatterKind.value === "custom-template") {
-    return {
-      kind: "custom-template",
-      template: formatterCustomTemplate.value.trim() || "${value}",
-    };
-  }
-  if (formatterKind.value === "foreign-key-display") {
-    return {
-      kind: "foreign-key-display",
-      referenceMode: formatterForeignKeyManual.value ? "manual" : "foreign-key",
-      refSchema: formatterForeignKeyRefSchema.value || undefined,
-      refTable: formatterForeignKeyRefTable.value,
-      refColumn: formatterForeignKeyRefColumn.value,
-      displayColumn: formatterForeignKeyDisplayColumn.value,
-      filter: formatterForeignKeyFilterEnabled.value
-        ? {
-            column: formatterForeignKeyFilterColumn.value,
-            mode: formatterForeignKeyFilterMode.value,
-            value: formatterForeignKeyFilterValue.value,
-            endValue: formatterForeignKeyFilterEndValue.value,
-          }
-        : undefined,
-    };
-  }
-  return {
-    kind: "datetime",
-    unit: formatterDateUnit.value,
-    pattern: formatterDatetimePattern.value,
-    timezone: formatterDateTimezone.value,
-  };
-}
-
-function loadFormatterDraft(formatter: ColumnFormatterConfig | undefined) {
-  formatterForeignKeyManual.value = false;
-  formatterForeignKeyRefSchema.value = "";
-  formatterForeignKeyRefTable.value = "";
-  formatterForeignKeyRefColumn.value = "";
-  formatterForeignKeyDisplayColumn.value = "";
-  formatterForeignKeySchemas.value = [];
-  formatterForeignKeyTables.value = [];
-  formatterForeignKeyColumns.value = [];
-  formatterForeignKeyReferenceKeys.value = [];
-  formatterForeignKeyReferenceMetadataStatus.value = "loading";
-  formatterForeignKeyTargetError.value = "";
-  formatterForeignKeyColumnsError.value = "";
-  formatterForeignKeyReferenceMetadataError.value = "";
-  formatterForeignKeyFilterEnabled.value = false;
-  formatterForeignKeyFilterColumn.value = "";
-  formatterForeignKeyFilterMode.value = "equals";
-  formatterForeignKeyFilterValue.value = "";
-  formatterForeignKeyFilterEndValue.value = "";
-  const draft = formatter ?? {
-    kind: "datetime",
-    unit: "auto" as const,
-    pattern: "YYYY-MM-DD HH:mm:ss" as const,
-    timezone: dayjs.tz.guess(),
-  };
-  formatterKind.value = draft.kind === "custom-ref" ? "custom-template" : draft.kind === "iotdb-timestamp" ? "datetime" : draft.kind;
-  if (draft.kind === "datetime") {
-    formatterDateUnit.value = draft.unit;
-    formatterDatetimePattern.value = draft.pattern;
-    formatterDateTimezone.value = draft.timezone || dayjs.tz.guess() || "UTC";
-  } else if (draft.kind === "iotdb-timestamp") {
-    formatterDateUnit.value = "milliseconds";
-    formatterDatetimePattern.value = "YYYY-MM-DDTHH:mm:ss.SSSZ";
-    formatterDateTimezone.value = draft.timezone;
-  } else if (draft.kind === "json-path") {
-    formatterJsonPath.value = draft.path;
-  } else if (draft.kind === "mask") {
-    formatterMaskPrefix.value = draft.prefix;
-    formatterMaskSuffix.value = draft.suffix;
-  } else if (draft.kind === "custom-ref") {
-    const saved = settingsStore.editorSettings.customColumnFormatters[draft.formatterId];
-    formatterCustomId.value = saved ? saved.id : CUSTOM_FORMATTER_NEW;
-    formatterCustomCapturedDeleteVersion.value = saved ? settingsStore.customColumnFormatterDeleteVersion(saved.id) : undefined;
-    formatterCustomName.value = saved?.name ?? "";
-    formatterCustomTemplate.value = saved?.template ?? "${value}";
-  } else if (draft.kind === "custom-template") {
-    formatterCustomId.value = CUSTOM_FORMATTER_NEW;
-    formatterCustomCapturedDeleteVersion.value = undefined;
-    formatterCustomName.value = "";
-    formatterCustomTemplate.value = draft.template;
-  } else if (draft.kind === "foreign-key-display") {
-    formatterForeignKeyManual.value = draft.referenceMode === "manual";
-    formatterForeignKeyRefSchema.value = draft.refSchema ?? "";
-    formatterForeignKeyRefTable.value = draft.refTable;
-    formatterForeignKeyRefColumn.value = draft.refColumn;
-    formatterForeignKeyDisplayColumn.value = draft.displayColumn;
-    formatterForeignKeyFilterEnabled.value = !!draft.filter;
-    formatterForeignKeyFilterColumn.value = draft.filter?.column ?? "";
-    formatterForeignKeyFilterMode.value = draft.filter?.mode ?? "equals";
-    formatterForeignKeyFilterValue.value = draft.filter?.value ?? "";
-    formatterForeignKeyFilterEndValue.value = draft.filter?.endValue ?? "";
-  }
-}
-
-function formatterForeignKeyForColumn(columnIndex: number): ForeignKeyInfo | undefined {
-  return singleColumnForeignKey(cellForeignKeyAssociation(columnIndex));
-}
-
-async function loadFormatterForeignKeyColumns(columnIndex: number) {
-  const request = ++formatterForeignKeyColumnsRequest;
-  formatterForeignKeyColumns.value = [];
-  formatterForeignKeyReferenceKeys.value = [];
-  formatterForeignKeyReferenceMetadataStatus.value = "loading";
-  formatterForeignKeyColumnsError.value = "";
-  formatterForeignKeyReferenceMetadataError.value = "";
-  if (!props.connectionId || !formatterForeignKeyRefTable.value) return;
-  formatterForeignKeyColumnsLoading.value = true;
-  try {
-    const schema = formatterForeignKeyRefSchema.value || props.tableMeta?.schema || props.schema || props.database || "";
-    const manual = formatterForeignKeyManual.value;
-    const [columnsResult, referenceKeysResult] = await Promise.allSettled([
-      api.getColumns(props.connectionId, props.database || "", schema, formatterForeignKeyRefTable.value, props.tableMeta?.catalog),
-      manual ? api.listReferenceKeys(props.connectionId, props.database || "", schema, formatterForeignKeyRefTable.value, props.tableMeta?.catalog) : Promise.resolve([] as ReferenceKeyInfo[]),
-    ]);
-    if (request !== formatterForeignKeyColumnsRequest || formatterOpenColumn.value !== columnIndex) return;
-    if (columnsResult.status === "rejected") throw columnsResult.reason;
-    const columns = columnsResult.value;
-    formatterForeignKeyColumns.value = columns;
-    if (manual && referenceKeysResult.status === "rejected") {
-      formatterForeignKeyReferenceMetadataStatus.value = "unavailable";
-      formatterForeignKeyReferenceMetadataError.value = String(referenceKeysResult.reason?.message || referenceKeysResult.reason);
-    } else {
-      formatterForeignKeyReferenceKeys.value = referenceKeysResult.status === "fulfilled" ? referenceKeysResult.value : [];
-      formatterForeignKeyReferenceMetadataStatus.value = "available";
-    }
-    const referenceColumns = manualReferenceKeyColumns(columns, formatterForeignKeyReferenceKeys.value, formatterForeignKeyReferenceFilter.value);
-    const foreignKey = formatterForeignKeyForColumn(columnIndex);
-    if (manual) {
-      formatterForeignKeyRefColumn.value = reconcileManualReferenceColumn(formatterForeignKeyRefColumn.value, referenceColumns, formatterForeignKeyReferenceMetadataStatus.value);
-    } else if (!formatterForeignKeyRefColumn.value || !columns.some((column) => column.name === formatterForeignKeyRefColumn.value)) {
-      formatterForeignKeyRefColumn.value = foreignKey?.ref_column ?? "";
-    }
-    if (!formatterForeignKeyDisplayColumn.value || !columns.some((column) => column.name === formatterForeignKeyDisplayColumn.value)) {
-      formatterForeignKeyDisplayColumn.value = columns.find((column) => column.name !== formatterForeignKeyRefColumn.value)?.name ?? columns[0]?.name ?? "";
-    }
-    if (formatterForeignKeyFilterEnabled.value && !columns.some((column) => column.name === formatterForeignKeyFilterColumn.value)) formatterForeignKeyFilterColumn.value = "";
-  } catch (error: any) {
-    if (request === formatterForeignKeyColumnsRequest) formatterForeignKeyColumnsError.value = String(error?.message || error);
-  } finally {
-    if (request === formatterForeignKeyColumnsRequest) formatterForeignKeyColumnsLoading.value = false;
-  }
-}
-
-function formatterForeignKeyDefaultSchema() {
-  return formatterForeignKeyRefSchema.value || props.tableMeta?.schema || props.schema || props.database || "";
-}
-
-async function loadFormatterManualReferenceTables(columnIndex: number, request = ++formatterForeignKeyTargetRequest) {
-  formatterForeignKeyTables.value = [];
-  formatterForeignKeyTargetError.value = "";
-  if (!props.connectionId) return;
-  formatterForeignKeyTablesLoading.value = true;
-  try {
-    const tables = await api.listTables(props.connectionId, props.database || "", formatterForeignKeyRefSchema.value, undefined, undefined, undefined, undefined, props.tableMeta?.catalog);
-    if (request !== formatterForeignKeyTargetRequest || formatterOpenColumn.value !== columnIndex) return;
-    formatterForeignKeyTables.value = [...new Set(tables.map((table) => table.name))].sort((left, right) => left.localeCompare(right));
-    if (formatterForeignKeyRefTable.value && !formatterForeignKeyTables.value.includes(formatterForeignKeyRefTable.value)) formatterForeignKeyTables.value.unshift(formatterForeignKeyRefTable.value);
-    if (formatterForeignKeyRefTable.value) await loadFormatterForeignKeyColumns(columnIndex);
-  } catch (error: any) {
-    if (request === formatterForeignKeyTargetRequest) formatterForeignKeyTargetError.value = String(error?.message || error);
-  } finally {
-    if (request === formatterForeignKeyTargetRequest) formatterForeignKeyTablesLoading.value = false;
-  }
-}
-
-async function loadFormatterManualReferenceOptions(columnIndex: number) {
-  const request = ++formatterForeignKeyTargetRequest;
-  formatterForeignKeySchemas.value = [];
-  formatterForeignKeySchemasLoading.value = true;
-  formatterForeignKeyTargetError.value = "";
-  try {
-    const schemas = props.connectionId ? await api.listSchemas(props.connectionId, props.database || "") : [];
-    if (request !== formatterForeignKeyTargetRequest || formatterOpenColumn.value !== columnIndex) return;
-    const selectedSchema = formatterForeignKeyDefaultSchema();
-    formatterForeignKeyRefSchema.value = selectedSchema;
-    formatterForeignKeySchemas.value = [...new Set([selectedSchema, ...schemas].filter(Boolean))].sort((left, right) => left.localeCompare(right));
-  } catch (error: any) {
-    if (request !== formatterForeignKeyTargetRequest) return;
-    const selectedSchema = formatterForeignKeyDefaultSchema();
-    formatterForeignKeyRefSchema.value = selectedSchema;
-    formatterForeignKeySchemas.value = selectedSchema ? [selectedSchema] : [];
-    formatterForeignKeyTargetError.value = String(error?.message || error);
-  } finally {
-    if (request === formatterForeignKeyTargetRequest) formatterForeignKeySchemasLoading.value = false;
-  }
-  if (request === formatterForeignKeyTargetRequest) await loadFormatterManualReferenceTables(columnIndex, request);
-}
-
-function selectFormatterForeignKeySchema(value: string, columnIndex: number) {
-  formatterForeignKeyColumnsRequest += 1;
-  formatterForeignKeyRefSchema.value = value;
-  formatterForeignKeyRefTable.value = "";
-  formatterForeignKeyRefColumn.value = "";
-  formatterForeignKeyDisplayColumn.value = "";
-  formatterForeignKeyFilterColumn.value = "";
-  formatterForeignKeyColumns.value = [];
-  formatterForeignKeyReferenceKeys.value = [];
-  formatterForeignKeyReferenceMetadataStatus.value = "loading";
-  formatterForeignKeyReferenceMetadataError.value = "";
-  void loadFormatterManualReferenceTables(columnIndex);
-}
-
-function selectFormatterForeignKeyTable(value: string, columnIndex: number) {
-  formatterForeignKeyTargetRequest += 1;
-  formatterForeignKeyRefTable.value = value;
-  formatterForeignKeyRefColumn.value = "";
-  formatterForeignKeyDisplayColumn.value = "";
-  formatterForeignKeyFilterColumn.value = "";
-  formatterForeignKeyReferenceKeys.value = [];
-  formatterForeignKeyReferenceMetadataStatus.value = "loading";
-  formatterForeignKeyReferenceMetadataError.value = "";
-  void loadFormatterForeignKeyColumns(columnIndex);
-}
-
-function selectFormatterForeignKeyFilterMode(value: DataGridContextFilterMode) {
-  formatterForeignKeyFilterMode.value = value;
-  if (!filterModeNeedsValue(value)) formatterForeignKeyFilterValue.value = formatterForeignKeyFilterEndValue.value = "";
-  else if (!filterModeUsesRange(value)) formatterForeignKeyFilterEndValue.value = "";
-}
-
-async function openColumnFormatter(columnIndex: number) {
-  const savedFormatter = savedColumnFormatter(columnIndex);
-  loadFormatterDraft(savedFormatter);
-  formatterOpenColumn.value = columnIndex;
-  await fetchForeignKeys();
-  const foreignKey = formatterForeignKeyForColumn(columnIndex);
-  if (savedFormatter?.kind === "foreign-key-display" && savedFormatter.referenceMode === "manual") {
-    formatterForeignKeyManual.value = true;
-    await loadFormatterManualReferenceOptions(columnIndex);
-  } else if (foreignKey) {
-    formatterForeignKeyManual.value = false;
-    formatterForeignKeyRefSchema.value = foreignKey.ref_schema || props.tableMeta?.schema || props.schema || "";
-    formatterForeignKeyRefTable.value = foreignKey.ref_table;
-    formatterForeignKeyRefColumn.value = foreignKey.ref_column;
-    await loadFormatterForeignKeyColumns(columnIndex);
-  }
-}
-
 function openCompactColumnFormatter(columnIndex: number) {
   headerActionMenuOpenColumn.value = null;
   guardHeaderPanelDismiss();
@@ -1945,142 +1565,6 @@ function openCompactColumnFormatter(columnIndex: number) {
       guardHeaderPanelDismiss();
       void openColumnFormatter(columnIndex);
     }, 0);
-  });
-}
-
-function closeColumnFormatter() {
-  formatterForeignKeyColumnsRequest += 1;
-  formatterForeignKeyTargetRequest += 1;
-  formatterOpenColumn.value = null;
-}
-
-function handleColumnFormatterOpenChange(value: boolean, columnIndex: number) {
-  if (value) {
-    openColumnFormatter(columnIndex);
-  } else if (!shouldIgnoreHeaderPanelClose(columnIndex, formatterOpenColumn.value)) {
-    closeColumnFormatter();
-  }
-}
-
-async function saveColumnFormatter(columnIndex: number) {
-  const key = formatterKeyForColumn(columnIndex);
-  if (!key) return;
-  try {
-    let formatter = currentFormatterDraft();
-    if (formatterKind.value === "custom-template" && formatterCustomName.value.trim()) {
-      const id = formatterCustomId.value === CUSTOM_FORMATTER_NEW ? createCustomFormatterId() : formatterCustomId.value;
-      const saved = await settingsStore.upsertCustomColumnFormatter(
-        {
-          id,
-          name: formatterCustomName.value,
-          template: formatterCustomTemplate.value,
-        },
-        formatterCustomCapturedDeleteVersion.value,
-      );
-      if (!saved) {
-        selectCustomFormatter(CUSTOM_FORMATTER_NEW);
-        return;
-      }
-      formatter = { kind: "custom-ref", formatterId: saved.id };
-    }
-    settingsStore.updateColumnFormatter(key, formatter);
-    closeColumnFormatter();
-  } catch (error) {
-    toast(t("grid.tableOperationFailed", { message: translateBackendError(t, error) }), 5000);
-  }
-}
-
-function clearColumnFormatter(columnIndex: number) {
-  // Clear every candidate key: MySQL-family columns can carry both the shared
-  // empty-schema spelling and the legacy query-side mirrored-schema spelling,
-  // and either surface must leave the column unformatted everywhere.
-  const keys = formatterKeysForColumn(columnIndex);
-  if (!keys.length) return;
-  for (const key of keys) settingsStore.updateColumnFormatter(key, undefined);
-  closeColumnFormatter();
-}
-
-function formatterDraftIsSavable(): boolean {
-  const formatter = normalizeColumnFormatter(currentFormatterDraft());
-  if (!formatter || formatter.kind !== "foreign-key-display" || formatter.referenceMode !== "manual") return !!formatter;
-  return formatterForeignKeyReferenceValidation.value === "valid";
-}
-
-function selectFormatterKind(value: FormatterDraftKind, columnIndex: number) {
-  formatterKind.value = value;
-  if (value !== "foreign-key-display") return;
-  const foreignKey = formatterForeignKeyForColumn(columnIndex);
-  formatterForeignKeyManual.value = !foreignKey;
-  if (foreignKey) {
-    formatterForeignKeyRefSchema.value = foreignKey.ref_schema || props.tableMeta?.schema || props.schema || "";
-    formatterForeignKeyRefTable.value = foreignKey.ref_table;
-    formatterForeignKeyRefColumn.value = foreignKey.ref_column;
-    void loadFormatterForeignKeyColumns(columnIndex);
-  } else {
-    formatterForeignKeyRefSchema.value = formatterForeignKeyDefaultSchema();
-    formatterForeignKeyRefTable.value = "";
-    formatterForeignKeyRefColumn.value = "";
-    formatterForeignKeyDisplayColumn.value = "";
-    formatterForeignKeyFilterEnabled.value = false;
-    void loadFormatterManualReferenceOptions(columnIndex);
-  }
-}
-
-function selectCustomFormatter(value: string) {
-  formatterCustomId.value = value;
-  if (value === CUSTOM_FORMATTER_NEW) {
-    formatterCustomCapturedDeleteVersion.value = undefined;
-    formatterCustomName.value = "";
-    formatterCustomTemplate.value = "${value}";
-    return;
-  }
-  const saved = settingsStore.editorSettings.customColumnFormatters[value];
-  if (!saved) return;
-  formatterCustomCapturedDeleteVersion.value = settingsStore.customColumnFormatterDeleteVersion(saved.id);
-  formatterCustomName.value = saved.name;
-  formatterCustomTemplate.value = saved.template;
-}
-
-function requestDeleteCustomFormatter() {
-  if (formatterCustomId.value === CUSTOM_FORMATTER_NEW) return;
-  const saved = settingsStore.editorSettings.customColumnFormatters[formatterCustomId.value];
-  if (!saved) return;
-  formatterCustomDeleteId.value = saved.id;
-  formatterCustomDeleteName.value = saved.name;
-  formatterCustomDeleteOpen.value = true;
-}
-
-async function confirmDeleteCustomFormatter() {
-  const id = formatterCustomDeleteId.value;
-  if (!id || formatterCustomDeleteLoading.value) return;
-  formatterCustomDeleteLoading.value = true;
-  try {
-    await settingsStore.deleteCustomColumnFormatter(id);
-    if (formatterCustomId.value === id) selectCustomFormatter(CUSTOM_FORMATTER_NEW);
-    formatterCustomDeleteOpen.value = false;
-    formatterCustomDeleteId.value = "";
-    formatterCustomDeleteName.value = "";
-  } catch (error) {
-    toast(t("grid.tableOperationFailed", { message: translateBackendError(t, error) }), 5000);
-  } finally {
-    formatterCustomDeleteLoading.value = false;
-  }
-}
-
-function createCustomFormatterId(): string {
-  return `fmt_${uuid()}`;
-}
-
-function formatterPreviewRows(columnIndex: number) {
-  const formatter = resolveColumnFormatter(currentFormatterDraft(), settingsStore.editorSettings.customColumnFormatters);
-  return displayRowRefs.value.slice(0, 5).map((_, index) => {
-    const item = displayItemAt(index);
-    const value = item?.data[columnIndex] ?? null;
-    return {
-      index: index + 1,
-      raw: displayCellValue(value),
-      formatted: formatter?.kind === "foreign-key-display" ? formatForeignKeyCellDisplay(value, columnIndex) : applyColumnFormatter(value, formatter),
-    };
   });
 }
 
@@ -5172,6 +4656,79 @@ function displayRowIndexById(rowId: number): number {
 }
 
 const displayItems = computed<RowItem[]>(() => displayRowRefs.value.map(rowItemFromDisplayRef));
+
+const {
+  formatterOpenColumn,
+  formatterKind,
+  formatterDateUnit,
+  formatterDatetimePattern,
+  formatterDateTimezone,
+  timezoneOptions,
+  formatterJsonPath,
+  formatterMaskPrefix,
+  formatterMaskSuffix,
+  formatterCustomId,
+  formatterCustomName,
+  formatterCustomTemplate,
+  formatterCustomDeleteOpen,
+  formatterCustomDeleteLoading,
+  formatterCustomDeleteName,
+  formatterForeignKeyRefSchema,
+  formatterForeignKeyRefTable,
+  formatterForeignKeyRefColumn,
+  formatterForeignKeyDisplayColumn,
+  formatterForeignKeyManual,
+  formatterForeignKeySchemas,
+  formatterForeignKeyTables,
+  formatterForeignKeyColumns,
+  formatterForeignKeyReferenceMetadataStatus,
+  formatterForeignKeySchemasLoading,
+  formatterForeignKeyTablesLoading,
+  formatterForeignKeyColumnsLoading,
+  formatterForeignKeyTargetError,
+  formatterForeignKeyColumnsError,
+  formatterForeignKeyReferenceMetadataError,
+  formatterForeignKeyFilterEnabled,
+  formatterForeignKeyFilterColumn,
+  formatterForeignKeyFilterMode,
+  formatterForeignKeyFilterValue,
+  formatterForeignKeyFilterEndValue,
+  formatterForeignKeyReferenceColumns,
+  formatterForeignKeyReferenceValidation,
+  savedCustomFormatters,
+  formatterKeyForColumn,
+  savedColumnFormatter,
+  columnFormatter,
+  columnHasFormatter,
+  openColumnFormatter,
+  closeColumnFormatter,
+  handleColumnFormatterOpenChange,
+  saveColumnFormatter,
+  clearColumnFormatter,
+  formatterDraftIsSavable,
+  selectFormatterKind,
+  selectFormatterForeignKeySchema,
+  selectFormatterForeignKeyTable,
+  selectFormatterForeignKeyFilterMode,
+  selectCustomFormatter,
+  requestDeleteCustomFormatter,
+  confirmDeleteCustomFormatter,
+  formatterPreviewRows,
+  CUSTOM_FORMATTER_NEW,
+} = useDataGridColumnFormatter({
+  props,
+  settingsStore,
+  resolvedDatabaseType,
+  resolvedConnectionUrlParams: computed(() => resolvedConnectionConfig.value?.url_params),
+  tableColumnForGridColumn,
+  foreignKeyForColumn: (columnIndex) => singleColumnForeignKey(cellForeignKeyAssociation(columnIndex)),
+  fetchForeignKeys,
+  displayRowRefs,
+  displayItemAt,
+  shouldIgnoreHeaderPanelClose,
+  formatForeignKeyCellDisplay,
+  toast,
+});
 
 watch(
   () => displayRowCount.value,
@@ -11681,6 +11238,10 @@ function cellForeignKeyAssociation(actualColIdx: number): ForeignKeyAssociation 
   });
   if (!columnName) return null;
   return columnForeignKeyMap.value.get(columnName.toLowerCase()) ?? null;
+}
+
+function formatterForeignKeyForColumn(columnIndex: number): ForeignKeyInfo | undefined {
+  return singleColumnForeignKey(cellForeignKeyAssociation(columnIndex));
 }
 
 function savedForeignKeyDisplayConfig(columnIndex: number): ForeignKeyDisplayConfig | undefined {
