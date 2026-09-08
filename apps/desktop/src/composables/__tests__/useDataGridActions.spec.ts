@@ -672,6 +672,48 @@ describe("useDataGridActions", () => {
     expect(tab.resultPageJumpProgress).toBeUndefined();
   });
 
+  it("does not reuse an exhausted Elasticsearch cursor for a new page", async () => {
+    mocks.infiniteScroll = false;
+    mocks.getConfig.mockReturnValue({ id: "elasticsearch-1", db_type: "elasticsearch" });
+    const tab = reactive({
+      id: "tab-1",
+      connectionId: "elasticsearch-1",
+      database: "",
+      title: "Query",
+      sql: "SELECT * FROM `dbx-app-logs-v1` AS dalv",
+      resultBaseSql: "SELECT * FROM `dbx-app-logs-v1` AS dalv",
+      resultPageLimit: 100,
+      resultPageOffset: 0,
+      resultSessionId: "exhausted-cursor",
+      resultClientSessionId: "client-1",
+      result: {
+        columns: ["message"],
+        rows: [["page-1"]],
+        affected_rows: 1,
+        execution_time_ms: 1,
+        session_id: "exhausted-cursor",
+        has_more: false,
+      },
+      mode: "query",
+      isDirty: false,
+      isExecuting: false,
+      isCancelling: false,
+      isExplaining: false,
+    } as QueryTab);
+    const actions = useDataGridActions(computed(() => tab));
+
+    await actions.onPaginate(tab.id, 100, 100);
+
+    expect(mocks.executeTabSql).toHaveBeenCalledWith(
+      "tab-1",
+      tab.sql,
+      expect.objectContaining({
+        pagination: { offset: 100, limit: 100, sessionId: undefined },
+      }),
+    );
+    expect(mocks.executeTabSql.mock.calls[0]?.[2]).not.toHaveProperty("retainDisplayedResult");
+  });
+
   it("uses the active multi-database result target for pagination", async () => {
     const tab = {
       id: "tab-1",

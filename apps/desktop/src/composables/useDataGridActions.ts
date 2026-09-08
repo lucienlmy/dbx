@@ -395,7 +395,7 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
       // request per skipped page (page 1 -> 101 sends 100 requests);
       // retainDisplayedResult only hides those intermediate pages from the UI.
       const currentResultSessionId = tab.resultSessionId ?? tab.result?.session_id;
-      if (usesElasticsearchCursor && !appendResult && typeof expectedNextOffset === "number" && limit === tab.resultPageLimit && currentResultSessionId) {
+      if (usesElasticsearchCursor && tab.result?.has_more === true && !appendResult && typeof expectedNextOffset === "number" && limit === tab.resultPageLimit && currentResultSessionId) {
         let nextOffset = expectedNextOffset;
         let nextSessionId: string | undefined = currentResultSessionId;
         const currentPage = Math.floor(nextOffset / limit);
