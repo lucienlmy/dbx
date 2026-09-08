@@ -1813,7 +1813,7 @@ export const useConnectionStore = defineStore("connection", () => {
       savedSqlFilesByDatabase = indexSavedSqlFilesByDatabase(savedSqlStore.allFiles);
       refreshDatabaseSavedSqlTrees();
     },
-    { flush: "sync" },
+    { flush: "post" },
   );
 
   function schemaCacheKey(...parts: string[]): string {
