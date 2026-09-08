@@ -78,13 +78,13 @@ import DataGridQueryControls from "@/components/grid/DataGridQueryControls.vue";
 import DataGridFilterBuilder from "@/components/grid/DataGridFilterBuilder.vue";
 import DataGridFilterWorkbench from "@/components/grid/DataGridFilterWorkbench.vue";
 import DataGridTextFilterWorkbench from "@/components/grid/DataGridTextFilterWorkbench.vue";
+import DataGridTableInfoPanels from "@/components/grid/DataGridTableInfoPanels.vue";
 import TemporalCellEditor from "@/components/grid/TemporalCellEditor.vue";
 import EnumCellEditor from "@/components/grid/EnumCellEditor.vue";
 import DataGridReadonlyTextSelection from "@/components/grid/DataGridReadonlyTextSelection.vue";
 import GridSnapshotDialog from "@/components/grid/GridSnapshotDialog.vue";
 import type { QueryResult, ColumnInfo, ConstraintInfo, DatabaseType, ForeignKeyInfo, IndexInfo, TriggerInfo, TableInfoTab, QueryResultSourceColumnRef, QueryPageJumpProgress } from "@/types/database";
 import { isQueryExecutionErrorResult } from "@/lib/query/queryResultError";
-import { tableColumnDefaultDisplayValue } from "@/lib/table/tableColumnDefaultPresentation";
 import { shouldNavigateFromTableInfoColumnClick } from "@/lib/table/tableInfoColumnNavigation";
 import { tableInfoTabForDrawerToggle } from "@/lib/table/tableInfoTabPreference";
 import * as api from "@/lib/backend/api";
@@ -13697,181 +13697,31 @@ function openGridSnapshot() {
               </div>
             </div>
 
-            <div v-if="activeTableInfoTab === 'columns'" class="flex-1 min-h-0 overflow-auto">
-              <div v-if="tableInfoColumnsLoading" class="h-full flex items-center justify-center">
-                <Loader2 class="w-4 h-4 animate-spin text-muted-foreground" />
-              </div>
-              <div v-else-if="searchQuery && filteredColumns.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoNoResults") }}
-              </div>
-              <table v-else class="w-full text-xs">
-                <thead class="sticky top-0 bg-muted text-muted-foreground">
-                  <tr class="border-b">
-                    <th class="text-left text-nowrap font-medium px-3 py-2 w-8">#</th>
-                    <th class="text-left text-nowrap font-medium px-3 py-2">
-                      {{ t("grid.columnName") }}
-                    </th>
-                    <th class="text-left text-nowrap font-medium px-3 py-2">
-                      {{ t("grid.columnType") }}
-                    </th>
-                    <th class="text-left text-nowrap font-medium px-3 py-2">
-                      {{ t("grid.tableInfoNullable") }}
-                    </th>
-                    <th class="text-left text-nowrap font-medium px-3 py-2">
-                      {{ t("structureEditor.defaultValue") }}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="(column, index) in filteredColumns"
-                    :key="column.name"
-                    class="border-b cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-800/30"
-                    role="button"
-                    tabindex="0"
-                    :title="column.name"
-                    @click="onTableInfoColumnClick(column.name)"
-                    @keydown.enter.prevent="scrollToTableInfoColumn(column.name)"
-                    @keydown.space.prevent="scrollToTableInfoColumn(column.name)"
-                  >
-                    <td class="px-3 py-2 text-muted-foreground w-8">
-                      {{ index + 1 }}
-                    </td>
-                    <td class="cursor-text select-text px-3 py-2 font-medium">
-                      <span class="inline-flex items-center gap-1.5">
-                        <KeyRound v-if="column.is_primary_key" class="h-3 w-3 text-amber-500" />
-                        {{ column.name }}
-                      </span>
-                      <div v-if="column.comment" class="mt-0.5 text-[11px] text-muted-foreground truncate">
-                        {{ column.comment }}
-                      </div>
-                    </td>
-                    <td class="px-3 py-2 font-mono text-[11px] text-muted-foreground">
-                      {{ gaussdbMColumnType(column.data_type) }}
-                    </td>
-                    <td class="px-3 py-2">
-                      {{ column.is_nullable ? "YES" : "NO" }}
-                    </td>
-                    <td
-                      data-table-info-column-default
-                      class="max-w-56 px-3 py-2 font-mono text-[11px]"
-                      :class="{
-                        'text-muted-foreground/70': column.column_default == null,
-                      }"
-                      :title="column.column_default ?? undefined"
-                    >
-                      <span class="block max-w-56 truncate">{{ tableColumnDefaultDisplayValue(column.column_default) }}</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div v-else-if="activeTableInfoTab === 'indexes'" class="flex-1 min-h-0 overflow-auto">
-              <div v-if="indexesLoading" class="h-full flex items-center justify-center">
-                <Loader2 class="w-4 h-4 animate-spin text-muted-foreground" />
-              </div>
-              <div v-else-if="indexesError" class="p-3 text-xs text-destructive">
-                {{ indexesError }}
-              </div>
-              <div v-else-if="searchQuery && filteredIndexes.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoNoResults") }}
-              </div>
-              <div v-else-if="indexes.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoEmpty") }}
-              </div>
-              <div v-else class="divide-y">
-                <div v-for="index in filteredIndexes" :key="index.name" class="p-3 text-xs">
-                  <div class="flex items-start gap-2">
-                    <div class="min-w-0 flex-1">
-                      <div class="font-medium truncate">{{ index.name }}</div>
-                      <div class="mt-1 flex flex-wrap gap-1">
-                        <span v-if="index.is_primary" class="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-600">PK</span>
-                        <span v-if="index.is_unique" class="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-600">UNIQUE</span>
-                        <span v-if="index.index_type" class="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">{{ index.index_type }}</span>
-                      </div>
-                      <div class="mt-2 font-mono text-[11px] text-muted-foreground break-all">
-                        {{ index.columns.join(", ") }}
-                      </div>
-                    </div>
-                    <Button v-if="canManageMongoIndexes && !isProtectedMongoIndex(index)" variant="ghost" size="sm" class="h-7 shrink-0 px-2 text-[11px] text-destructive hover:text-destructive" @click="requestDropMongoIndex(index)">
-                      <Trash2 class="mr-1 h-3 w-3" />
-                      {{ t("contextMenu.dropIndex") }}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-else-if="activeTableInfoTab === 'foreignKeys'" class="flex-1 min-h-0 overflow-auto">
-              <div v-if="foreignKeysLoading" class="h-full flex items-center justify-center">
-                <Loader2 class="w-4 h-4 animate-spin text-muted-foreground" />
-              </div>
-              <div v-else-if="foreignKeysError" class="p-3 text-xs text-destructive">
-                {{ foreignKeysError }}
-              </div>
-              <div v-else-if="searchQuery && filteredForeignKeys.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoNoResults") }}
-              </div>
-              <div v-else-if="foreignKeys.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoEmpty") }}
-              </div>
-              <div v-else class="divide-y">
-                <div v-for="fk in filteredForeignKeys" :key="`${fk.name}:${fk.column}`" class="p-3 text-xs">
-                  <div class="font-medium truncate">{{ fk.name }}</div>
-                  <div class="mt-1 font-mono text-[11px] text-muted-foreground break-all">{{ fk.column }} -> {{ fk.ref_table }}.{{ fk.ref_column }}</div>
-                </div>
-              </div>
-            </div>
-
-            <div v-else-if="activeTableInfoTab === 'triggers'" class="flex-1 min-h-0 overflow-auto">
-              <div v-if="triggersLoading" class="h-full flex items-center justify-center">
-                <Loader2 class="w-4 h-4 animate-spin text-muted-foreground" />
-              </div>
-              <div v-else-if="triggersError" class="p-3 text-xs text-destructive">
-                {{ triggersError }}
-              </div>
-              <div v-else-if="searchQuery && filteredTriggers.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoNoResults") }}
-              </div>
-              <div v-else-if="triggers.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoEmpty") }}
-              </div>
-              <div v-else class="divide-y">
-                <div v-for="trigger in filteredTriggers" :key="trigger.name" class="p-3 text-xs">
-                  <div class="font-medium truncate">{{ trigger.name }}</div>
-                  <div class="mt-1 text-[11px] text-muted-foreground">{{ trigger.timing }} {{ trigger.event }}</div>
-                </div>
-              </div>
-            </div>
-
-            <div v-else-if="activeTableInfoTab === 'constraints'" class="flex-1 min-h-0 overflow-auto">
-              <div v-if="constraintsLoading" class="h-full flex items-center justify-center">
-                <Loader2 class="w-4 h-4 animate-spin text-muted-foreground" />
-              </div>
-              <div v-else-if="constraintsError" class="p-3 text-xs text-destructive">
-                {{ constraintsError }}
-              </div>
-              <div v-else-if="searchQuery && filteredConstraints.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoNoResults") }}
-              </div>
-              <div v-else-if="constraintsForTab.length === 0" class="p-6 text-center text-xs text-muted-foreground">
-                {{ t("grid.tableInfoEmpty") }}
-              </div>
-              <div v-else class="divide-y">
-                <div v-for="constraint in filteredConstraints" :key="constraint.name" class="p-3 text-xs" :class="constraint.enabled ? '' : 'opacity-60'">
-                  <div class="flex flex-wrap items-center gap-1.5">
-                    <span class="font-medium truncate">{{ constraint.name }}</span>
-                    <span class="rounded border px-1 py-px text-[10px] text-muted-foreground">{{ constraint.constraint_type }}</span>
-                    <span v-if="!constraint.enabled" class="rounded border px-1 py-px text-[10px] text-muted-foreground">{{ t("grid.tableInfoConstraintDisabled") }}</span>
-                    <span v-else-if="!constraint.valid" class="rounded border px-1 py-px text-[10px] text-muted-foreground">{{ t("grid.tableInfoConstraintNotValidated") }}</span>
-                  </div>
-                  <div v-if="constraint.columns.length" class="mt-1 font-mono text-[11px] text-muted-foreground break-all">{{ constraint.columns.join(", ") }}</div>
-                  <div v-if="constraint.ref_table" class="mt-1 font-mono text-[11px] text-muted-foreground break-all">-> {{ constraint.ref_schema ? `${constraint.ref_schema}.` : "" }}{{ constraint.ref_table }}{{ constraint.ref_columns.length ? `(${constraint.ref_columns.join(", ")})` : "" }}</div>
-                  <div v-if="constraint.definition" class="mt-1 font-mono text-[11px] text-muted-foreground break-all whitespace-pre-wrap">{{ constraint.definition }}</div>
-                </div>
-              </div>
-            </div>
+            <DataGridTableInfoPanels
+              v-if="activeTableInfoTab !== 'ddl'"
+              :active-tab="activeTableInfoTab"
+              :search-query="searchQuery"
+              :columns="filteredColumns"
+              :columns-loading="tableInfoColumnsLoading"
+              :indexes="filteredIndexes"
+              :indexes-loading="indexesLoading"
+              :indexes-error="indexesError"
+              :can-manage-mongo-indexes="canManageMongoIndexes"
+              :foreign-keys="filteredForeignKeys"
+              :foreign-keys-loading="foreignKeysLoading"
+              :foreign-keys-error="foreignKeysError"
+              :triggers="filteredTriggers"
+              :triggers-loading="triggersLoading"
+              :triggers-error="triggersError"
+              :constraints="filteredConstraints"
+              :constraints-loading="constraintsLoading"
+              :constraints-error="constraintsError"
+              :is-protected-mongo-index="isProtectedMongoIndex"
+              :format-column-type="gaussdbMColumnType"
+              @table-info-column-click="onTableInfoColumnClick"
+              @scroll-to-table-info-column="scrollToTableInfoColumn"
+              @request-drop-mongo-index="requestDropMongoIndex"
+            />
 
             <pre
               v-else-if="activeTableInfoTab === 'ddl' && !ddlLoading"
