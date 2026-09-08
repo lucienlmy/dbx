@@ -141,11 +141,14 @@ import {
   buildCopyTableDataSql,
   buildEmptyTableSql,
   buildTruncateTableSql,
+  buildMysqlAutoIncrementSql,
   supportsDropTableCascade,
   supportsTruncateTableCascade,
+  supportsNativeMysqlAutoIncrement,
   supportsSchemaComment,
   type DropTableChildObjectSqlOptions,
   type DropObjectSqlOptions,
+  type MysqlAutoIncrementSqlOptions,
   type TableChildObjectType,
 } from "@/lib/database/dbAdminSql";
 import { buildRenameObjectSql, buildRenameDatabaseSql, buildRenameDatabasePreflightSql, databaseRenameMaintenanceDatabase, supportsDatabaseRename, supportsObjectRename, type RenameableObjectType } from "@/lib/table/objectRenameSql";
@@ -227,6 +230,9 @@ import {
   showTruncateTableConfirm,
   showVacuumTableConfirm,
   showMysqlAutoIncrementConfirm,
+  showBatchMysqlAutoIncrementConfirm,
+  batchMysqlAutoIncrementTargets,
+  batchMysqlAutoIncrementPreviewSql,
   showRenameObjectDialog,
   renameObjectName,
   renameObjectError,
@@ -2813,6 +2819,87 @@ function requestBatchEmpty() {
     });
 }
 
+function selectedBatchMysqlAutoIncrementTargets(): TreeNode[] {
+  const targets = selectedBatchTableTargets();
+  return targets.filter((node) => {
+    const config = node.connectionId ? connectionStore.getConfig(node.connectionId) : undefined;
+    return supportsNativeMysqlAutoIncrement(config);
+  });
+}
+
+function batchMysqlAutoIncrementMenuLabel(): string {
+  return t("contextMenu.batchMysqlAutoIncrement", { count: selectedBatchMysqlAutoIncrementTargets().length });
+}
+
+function batchMysqlAutoIncrementSqlOptionsForNode(node: TreeNode): MysqlAutoIncrementSqlOptions {
+  const config = node.connectionId ? connectionStore.getConfig(node.connectionId) : undefined;
+  return {
+    databaseType: config?.db_type ?? databaseTypeForNode(node) ?? "mysql",
+    driverProfile: config?.driver_profile,
+    schema: node.database || node.schema,
+    tableName: node.label,
+    value: mysqlAutoIncrementValue.value,
+  };
+}
+
+async function refreshBatchMysqlAutoIncrementPreviewSql() {
+  const targets = batchMysqlAutoIncrementTargets.value;
+  const statements: string[] = [];
+  for (const target of targets) {
+    const sql = await buildMysqlAutoIncrementSql(batchMysqlAutoIncrementSqlOptionsForNode(target)).catch(() => "");
+    if (sql) statements.push(sql);
+  }
+  batchMysqlAutoIncrementPreviewSql.value = statements.join("\n");
+}
+
+function requestBatchMysqlAutoIncrement() {
+  const targets = selectedBatchMysqlAutoIncrementTargets();
+  if (!targets.length) return;
+  batchMysqlAutoIncrementTargets.value = targets.slice();
+  mysqlAutoIncrementValue.value = "1";
+  batchMysqlAutoIncrementPreviewSql.value = "";
+  void refreshBatchMysqlAutoIncrementPreviewSql();
+  showBatchMysqlAutoIncrementConfirm.value = true;
+}
+
+async function confirmBatchMysqlAutoIncrement() {
+  const targets = batchMysqlAutoIncrementTargets.value.slice();
+  if (!targets.length) return;
+  const succeeded: TreeNode[] = [];
+  let failedCount = 0;
+  let firstError: unknown;
+  for (const target of targets) {
+    if (!target.connectionId || !target.database) {
+      failedCount++;
+      continue;
+    }
+    try {
+      const config = connectionStore.getConfig(target.connectionId);
+      if (!supportsNativeMysqlAutoIncrement(config)) throw new Error("Setting AUTO_INCREMENT is supported only for native MySQL connections.");
+      await connectionStore.ensureConnected(target.connectionId);
+      const sqlOptions = batchMysqlAutoIncrementSqlOptionsForNode(target);
+      const sql = await buildMysqlAutoIncrementSql(sqlOptions);
+      await executeTreeNodeSqlWithProductionGuard(target, sql, { database: target.database, schema: target.schema });
+      succeeded.push(target);
+    } catch (error) {
+      failedCount++;
+      firstError ??= error;
+    }
+  }
+  if (succeeded.length > 0) {
+    await refreshMutatedTableDataTabsForNodes(succeeded);
+  }
+  if (failedCount > 0 && firstError) {
+    toast(t("contextMenu.batchMysqlAutoIncrementPartialFail", { success: succeeded.length, failed: failedCount }), 5000);
+  } else if (succeeded.length > 0) {
+    toast(t("contextMenu.batchMysqlAutoIncrementSuccess", { count: succeeded.length, value: mysqlAutoIncrementValue.value }), 3000);
+  } else if (firstError) {
+    toast(t("contextMenu.tableOperationFailed", { message: (firstError as any)?.message || String(firstError) }), 5000);
+  }
+  batchMysqlAutoIncrementTargets.value = [];
+  showBatchMysqlAutoIncrementConfirm.value = false;
+}
+
 function requestDropSelectedNodes(): boolean {
   const selected = selectedTreeNodesInVisibleOrder();
   if (selected.length > 1 && selected.some((node) => node.id === activeNode.value.id)) {
@@ -4679,6 +4766,31 @@ routeDangerDialog(showMysqlAutoIncrementConfirm, () =>
   }),
 );
 
+routeDangerDialog(showBatchMysqlAutoIncrementConfirm, () =>
+  dangerRequest({
+    title: t("contextMenu.batchMysqlAutoIncrementTitle", { count: batchMysqlAutoIncrementTargets.value.length }),
+    message: t("contextMenu.batchMysqlAutoIncrementMessage", { count: batchMysqlAutoIncrementTargets.value.length }),
+    detailsText: t("contextMenu.mysqlAutoIncrementNonemptyHint"),
+    get sql() {
+      return batchMysqlAutoIncrementPreviewSql.value;
+    },
+    get confirmLabel() {
+      return t("contextMenu.batchMysqlAutoIncrement", { count: batchMysqlAutoIncrementTargets.value.length });
+    },
+    textInput: {
+      value: mysqlAutoIncrementValue.value,
+      label: t("contextMenu.mysqlAutoIncrementValue"),
+      placeholder: "1",
+      inputMode: "numeric",
+      async onInput(value) {
+        mysqlAutoIncrementValue.value = value;
+        await refreshBatchMysqlAutoIncrementPreviewSql();
+      },
+    },
+    confirm: confirmBatchMysqlAutoIncrement,
+  }),
+);
+
 routeDangerDialog(showDropObjectConfirm, () =>
   dangerRequest({
     title: dropObjectConfirmTitle(),
@@ -5887,8 +5999,8 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
       if (supportsVacuum.value) {
         destructiveActions.push({ label: t("contextMenu.vacuumTable"), action: vacuumTable, icon: Activity, variant: "destructive" as const });
       }
-      if (supportsMysqlAutoIncrement.value) {
-        items.push({ label: t("contextMenu.mysqlAutoIncrement"), action: mysqlAutoIncrement, icon: Gauge });
+      if (supportsMysqlAutoIncrement.value || batchAutoIncrementCount > 1) {
+        items.push({ label: autoIncrementMenuLabel(t("contextMenu.mysqlAutoIncrement")), action: autoIncrementMenuAction(mysqlAutoIncrement), icon: Gauge });
       }
       if (supportsTruncate.value) {
         destructiveActions.push({
@@ -6199,12 +6311,15 @@ function treeItemMenuItems(): ContextMenuItem[] {
   const batchDropCount = selectedBatchDropTargets().length;
   const batchEmptyCount = selectedBatchEmptyTargets().length;
   const batchTruncateCount = selectedBatchTruncateTargets().length;
+  const batchAutoIncrementCount = selectedBatchMysqlAutoIncrementTargets().length;
   const deleteMenuLabel = (singleLabel: string) => (batchDropCount > 1 ? batchDropMenuLabel() : singleLabel);
   const deleteMenuAction = (singleAction: () => void) => (batchDropCount > 1 ? requestBatchDrop : singleAction);
   const truncateMenuLabel = (singleLabel: string) => (batchTruncateCount > 1 ? batchTruncateMenuLabel() : singleLabel);
   const truncateMenuAction = (singleAction: () => void) => (batchTruncateCount > 1 ? requestBatchTruncate : singleAction);
   const emptyMenuLabel = (singleLabel: string) => (batchEmptyCount > 1 ? batchEmptyMenuLabel() : singleLabel);
   const emptyMenuAction = (singleAction: () => void) => (batchEmptyCount > 1 ? requestBatchEmpty : singleAction);
+  const autoIncrementMenuLabel = (singleLabel: string) => (batchAutoIncrementCount > 1 ? batchMysqlAutoIncrementMenuLabel() : singleLabel);
+  const autoIncrementMenuAction = (singleAction: () => void) => (batchAutoIncrementCount > 1 ? requestBatchMysqlAutoIncrement : singleAction);
 
   // 1. Pin toggle
   if (canPin.value) {
