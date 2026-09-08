@@ -62,6 +62,7 @@ export interface UseDataGridColumnFiltersOptions {
   waitForTableMeta: () => Promise<TableMetadata | null>;
   applyWhereFilter: () => Promise<void>;
   resetGridVerticalScroll: () => void;
+  onOpen?: () => void;
   onClose?: () => void;
   emitLocalFiltersChange: (filters: Record<string, string[]>) => void;
 }
@@ -170,6 +171,7 @@ export function useDataGridColumnFilters(options: UseDataGridColumnFiltersOption
   }
 
   function openLocalFilter(columnIndex: number, requestedMode: DataGridLocalFilterMode = "local") {
+    options.onOpen?.();
     state.localFilterSearch.value = "";
     const mode = requestedMode === "server" && options.canUseServerColumnFilter.value ? "server" : "local";
     const allKeys = mode === "server" ? [] : buildLocalFilterOptions(columnIndex).map((option) => option.key);

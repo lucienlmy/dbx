@@ -1235,6 +1235,9 @@ const localColumnFilterRuntime = useDataGridColumnFilters({
   waitForTableMeta,
   applyWhereFilter,
   resetGridVerticalScroll: () => resetLocalFilterGridScroll(),
+  onOpen: () => {
+    localFilterPopoverOffsetX.value = 0;
+  },
   onClose: () => {
     onLocalFilterResizeEnd();
     localFilterPopoverOffsetX.value = 0;
