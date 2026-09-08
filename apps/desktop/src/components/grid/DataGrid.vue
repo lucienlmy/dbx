@@ -160,8 +160,7 @@ import {
   type BinaryCellDownloadMode,
 } from "@/lib/dataGrid/binaryCellDownload";
 import { buildBinaryHexViewRows } from "@/lib/dataGrid/binaryHexViewer";
-import { canFormatCellDetailJson, cellDetailEditorText, compactJsonText, defaultCellDetailTab, formatJsonText, isGeometryColumnType, linkedCellDetailTarget, looksLikeJsonContainerText, valueEditorActions, visibleCellDetailTabs, type CellDetailTab } from "@/lib/dataGrid/cellDetailPresentation";
-import { createJsonValueDiffSnapshot, isJsonValueDiffAvailable, type JsonValueDiffContext, type JsonValueDiffSnapshot } from "@/lib/dataGrid/jsonValueDiff";
+import { canFormatCellDetailJson, cellDetailEditorText, defaultCellDetailTab, isGeometryColumnType, linkedCellDetailTarget, looksLikeJsonContainerText, visibleCellDetailTabs, type CellDetailTab } from "@/lib/dataGrid/cellDetailPresentation";
 import {
   buildDataGridCellDetail,
   buildDataGridColumnDetail,
@@ -322,6 +321,7 @@ import { createDataGridFilterConditionCache, useDataGridFilterBuilder, type Data
 import { cloneDataGridStructuredFilterRules, loadDataGridStructuredFilterState, saveDataGridStructuredFilterState, type DataGridCachedServerColumnFilter, type DataGridStructuredFilterCacheState } from "@/lib/dataGrid/dataGridFilterBuilderPersistence";
 import { useSqlHighlighter } from "@/composables/useSqlHighlighter";
 import { useCellDetailEditor, type UseCellDetailEditorReturn } from "@/composables/useCellDetailEditor";
+import { useDataGridCellDetailEdit } from "@/composables/useDataGridCellDetailEdit";
 import { useTheme } from "@/composables/useTheme";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useQueryStore } from "@/stores/queryStore";
@@ -5751,42 +5751,6 @@ watch(activeCellDetailTabs, (tabs) => {
   }
 });
 
-watch(activeCellDetailTab, (tab) => {
-  if (tab === "valueEditor") {
-    void startDetailEdit();
-  } else {
-    resetDetailEdit();
-  }
-});
-
-const detailEditValue = ref("");
-const detailEditOriginalValue = ref("");
-const isEditingDetail = ref(false);
-// commitDetailEdit() intentionally re-triggers the activeCellDetail watch below to
-// re-sync the editor with the canonical committed value. Any other change to the
-// same cell's underlying data while still editing (e.g. a result refresh, or a
-// large-value hydration resolving) must not clobber the user's in-progress draft.
-let allowActiveCellDetailResync = false;
-let lastSyncedDetailCellKey: string | null = null;
-const detailValueDiffOpen = ref(false);
-const detailValueDiffSnapshot = ref<Readonly<JsonValueDiffSnapshot> | null>(null);
-const hasPendingDetailEditorDraft = computed(() => isEditingDetail.value && detailEditValue.value !== detailEditOriginalValue.value);
-const detailJsonDiffContext = computed<JsonValueDiffContext | null>(() => {
-  const detail = activeCellDetail.value;
-  if (!detail) return null;
-  return {
-    columnName: detail.column,
-    columnType: detail.type,
-    originalValue: detailEditOriginalValue.value,
-    isEditable: detail.isEditable,
-    isEditing: isEditingDetail.value,
-  };
-});
-const showDetailJsonCompare = computed(() => {
-  const context = detailJsonDiffContext.value;
-  return !!context && isJsonValueDiffAvailable(context);
-});
-const canCompareDetailJson = computed(() => showDetailJsonCompare.value && hasPendingDetailEditorDraft.value);
 const hasPendingInlineEditorDraft = computed(() => {
   const cell = editingCell.value;
   if (!cell) return false;
@@ -5794,26 +5758,6 @@ const hasPendingInlineEditorDraft = computed(() => {
   if (!item || item.isDeleted) return false;
   const originalValue = inlineCellEditorText(item.data[cell.col] ?? null, cell.col);
   return editValue.value !== originalValue;
-});
-const hasPendingDataEditorDraft = computed(() => hasPendingDetailEditorDraft.value || hasPendingInlineEditorDraft.value);
-
-function syncPendingDataEditorDraft(pending: boolean) {
-  if (props.context !== "table-data" || !props.cacheKey) return;
-  const tab = queryStore.tabs.find((item) => item.id === props.cacheKey);
-  if (tab?.mode === "data") tab.hasPendingDataEditorDraft = pending || undefined;
-}
-
-watch(hasPendingDataEditorDraft, syncPendingDataEditorDraft, {
-  immediate: true,
-  flush: "sync",
-});
-
-const activeValueEditorActions = computed(() => {
-  const detail = activeCellDetail.value;
-  return valueEditorActions({
-    canSetNull: !!detail?.isEditable && detail.value !== null,
-    canFormatJson: !!detail?.isEditable && canFormatCellDetailJson(detail.value, detail.type),
-  });
 });
 
 const detailSqlConditionCopy = ref<PreparedCopyValue>({
@@ -5891,31 +5835,8 @@ async function prefetchDetailSqlCondition() {
   }
 }
 
-watch(activeCellDetail, (detail) => {
+watch(activeCellDetail, () => {
   void prefetchDetailSqlCondition();
-  if (activeCellDetailTab.value !== "valueEditor") return;
-  if (!detail?.isEditable) {
-    resetDetailEdit();
-    return;
-  }
-  const cellKey = `${detail.rowId}:${detail.colIndex}`;
-  const isSameCellStillEditing = isEditingDetail.value && cellKey === lastSyncedDetailCellKey;
-  lastSyncedDetailCellKey = cellKey;
-  if (isSameCellStillEditing && !allowActiveCellDetailResync) {
-    // The row's underlying data changed (e.g. a result refresh or a large-value
-    // hydration) while the user is still editing this same cell. Keep their draft.
-    return;
-  }
-  allowActiveCellDetailResync = false;
-  const value = dataGridCellEditorText({
-    value: detail.value,
-    databaseType: resolvedDatabaseType.value,
-    columnInfo: tableColumnForGridColumn(detail.colIndex) ?? resultColumnInfoForGridColumn(detail.colIndex),
-  });
-  detailEditValue.value = value;
-  detailEditOriginalValue.value = value;
-  syncEditorFromDetailEdit();
-  isEditingDetail.value = true;
 });
 
 const detailTemporalEditorConfig = computed(() => {
@@ -5980,12 +5901,64 @@ watch(valueEditorContainer, async (el) => {
   }
 });
 
-function resetDetailEdit() {
-  isEditingDetail.value = false;
-  detailEditValue.value = "";
-  detailEditOriginalValue.value = "";
-  lastSyncedDetailCellKey = null;
+const detailEdit = useDataGridCellDetailEdit({
+  activeDetail: activeCellDetail,
+  activeTab: activeCellDetailTab,
+  jsonFormatted: cellDetailJsonFormatted,
+  databaseType: resolvedDatabaseType,
+  resultRows: computed(() => props.result.rows),
+  getColumnInfo: (columnIndex) => tableColumnForGridColumn(columnIndex) ?? resultColumnInfoForGridColumn(columnIndex),
+  getRowItem,
+  hydrateLargeValueCell,
+  applyCellValue,
+  restoreCellValue,
+  syncEditor: (value, columnType) => {
+    const editor = getDetailEditor();
+    if (editor) editor.setValue(value, columnType);
+  },
+  refreshDetail: () => {
+    detailCell.value = detailCell.value ? { ...detailCell.value } : null;
+  },
+  warnFormattedJsonEdit: warnFormattedJsonEditIfNeeded,
+});
+
+const {
+  detailEditValue,
+  detailEditOriginalValue,
+  isEditingDetail,
+  detailValueDiffOpen,
+  detailValueDiffSnapshot,
+  hasPendingDetailEditorDraft,
+  showDetailJsonCompare,
+  canCompareDetailJson,
+  activeValueEditorActions,
+  resetDetailEdit,
+  syncEditorFromDetailEdit,
+  startDetailEdit,
+  commitDetailEdit,
+  cancelDetailEdit,
+  cancelValueEditorEdit,
+  commitValueEditorEdit,
+  restoreDetailOriginalValue,
+  setValueEditorNull,
+  formatValueEditorJson,
+  compactDetailJson,
+  openDetailJsonCompare,
+  setDetailNull,
+} = detailEdit;
+
+const hasPendingDataEditorDraft = computed(() => hasPendingDetailEditorDraft.value || hasPendingInlineEditorDraft.value);
+
+function syncPendingDataEditorDraft(pending: boolean) {
+  if (props.context !== "table-data" || !props.cacheKey) return;
+  const tab = queryStore.tabs.find((item) => item.id === props.cacheKey);
+  if (tab?.mode === "data") tab.hasPendingDataEditorDraft = pending || undefined;
 }
+
+watch(hasPendingDataEditorDraft, syncPendingDataEditorDraft, {
+  immediate: true,
+  flush: "sync",
+});
 
 function closeCellDetails() {
   resetDetailEdit();
@@ -6007,15 +5980,6 @@ function copyMongoJsonPreview() {
   if (mongoJsonPreviewFullText.value) copyText(mongoJsonPreviewFullText.value);
 }
 
-function cellDetailEditText(detail: DataGridCellDetail): string {
-  if (sideDetailJsonView.value && detail.formattedJson) return detail.formattedJson;
-  return dataGridCellEditorText({
-    value: detail.value,
-    databaseType: props.databaseType,
-    columnInfo: tableColumnForGridColumn(detail.colIndex),
-  });
-}
-
 function warnFormattedJsonEditIfNeeded(detail: DataGridCellDetail, force = false) {
   if (!force && (!sideDetailJsonView.value || !detail.formattedJson)) return;
   const count = Number(safeLocalStorageGet(FORMATTED_JSON_EDIT_WARNING_COUNT_STORAGE_KEY)) || 0;
@@ -6034,136 +5998,6 @@ function toggleCellDetailMetadataCollapsed() {
   settingsStore.updateEditorSettings({
     cellDetailMetadataCollapsed: !cellDetailMetadataCollapsed.value,
   });
-}
-
-async function startDetailEdit() {
-  const initialDetail = activeCellDetail.value;
-  if (!initialDetail || !initialDetail.isEditable) return;
-  if (!(await hydrateLargeValueCell(initialDetail.rowId, initialDetail.colIndex))) return;
-  const detail = activeCellDetail.value;
-  if (!detail || !detail.isEditable) return;
-  warnFormattedJsonEditIfNeeded(detail);
-  const value = cellDetailEditText(detail);
-  detailEditValue.value = value;
-  detailEditOriginalValue.value = value;
-  isEditingDetail.value = true;
-}
-
-function commitDetailEdit() {
-  const detail = activeCellDetail.value;
-  if (!detail || !isEditingDetail.value) return;
-  isEditingDetail.value = false;
-
-  const item = getRowItem(detail.rowId);
-  if (!item || item.isDeleted) return;
-  applyCellValue(detail.rowId, detail.colIndex, detailEditValue.value);
-  detailEditOriginalValue.value = detailEditValue.value;
-  // Force the activeCellDetail watch to re-run so the editor picks up the
-  // canonical (possibly coerced) committed value.
-  allowActiveCellDetailResync = true;
-  detailCell.value = detailCell.value ? { ...detailCell.value } : null;
-}
-
-function cancelDetailEdit() {
-  resetDetailEdit();
-}
-
-function syncEditorFromDetailEdit() {
-  const editor = getDetailEditor();
-  if (editor) {
-    editor.setValue(detailEditValue.value, activeCellDetail.value?.type);
-  }
-}
-
-function cancelValueEditorEdit() {
-  const detail = activeCellDetail.value;
-  if (!detail || !detail.isEditable) return;
-  const value = dataGridCellEditorText({
-    value: detail.value,
-    databaseType: props.databaseType,
-    columnInfo: tableColumnForGridColumn(detail.colIndex),
-  });
-  detailEditValue.value = value;
-  detailEditOriginalValue.value = value;
-  syncEditorFromDetailEdit();
-  isEditingDetail.value = true;
-}
-
-function commitValueEditorEdit() {
-  commitDetailEdit();
-  if (activeCellDetailTab.value === "valueEditor") {
-    isEditingDetail.value = true;
-  }
-}
-
-function restoreDetailOriginalValue() {
-  const detail = activeCellDetail.value;
-  if (!detail || !detail.isEditable) return;
-
-  const item = getRowItem(detail.rowId);
-  if (!item || item.isDeleted) return;
-
-  let restoredValue: CellValue = null;
-
-  if (!item.isNew && item.sourceIndex !== undefined) {
-    restoredValue = props.result.rows[item.sourceIndex]?.[detail.colIndex] ?? null;
-  }
-  restoreCellValue(detail.rowId, detail.colIndex);
-
-  const value = dataGridCellEditorText({
-    value: restoredValue,
-    databaseType: props.databaseType,
-    columnInfo: tableColumnForGridColumn(detail.colIndex),
-  });
-  detailEditValue.value = value;
-  detailEditOriginalValue.value = value;
-  syncEditorFromDetailEdit();
-  isEditingDetail.value = activeCellDetailTab.value === "valueEditor";
-  detailCell.value = { ...detailCell.value! };
-}
-
-function setValueEditorNull() {
-  setDetailNull();
-  detailEditValue.value = cellDetailEditorText(null);
-  detailEditOriginalValue.value = detailEditValue.value;
-  syncEditorFromDetailEdit();
-  isEditingDetail.value = activeCellDetailTab.value === "valueEditor";
-}
-
-function formatValueEditorJson() {
-  const detail = activeCellDetail.value;
-  if (!detail || !canFormatCellDetailJson(detailEditValue.value, detail.type)) return;
-  detailEditValue.value = formatJsonText(detailEditValue.value) ?? detailEditValue.value;
-  syncEditorFromDetailEdit();
-  warnFormattedJsonEditIfNeeded(detail, true);
-}
-
-function compactDetailJson() {
-  const detail = activeCellDetail.value;
-  if (!detail || !canFormatCellDetailJson(detailEditValue.value, detail.type)) return;
-  detailEditValue.value = compactJsonText(detailEditValue.value) ?? detailEditValue.value;
-  syncEditorFromDetailEdit();
-}
-
-function openDetailJsonCompare() {
-  const context = detailJsonDiffContext.value;
-  if (!context) return;
-  const snapshot = createJsonValueDiffSnapshot({ ...context, currentValue: detailEditValue.value });
-  if (!snapshot) return;
-  detailValueDiffSnapshot.value = snapshot;
-  detailValueDiffOpen.value = true;
-}
-
-function setDetailNull() {
-  const detail = activeCellDetail.value;
-  if (!detail || !detail.isEditable) return;
-
-  const item = getRowItem(detail.rowId);
-  if (!item || item.isDeleted) return;
-
-  applyCellValue(detail.rowId, detail.colIndex, null);
-  resetDetailEdit();
-  detailCell.value = { ...detailCell.value! };
 }
 
 function applyColumnSort(column: string, columnIndex: number, direction: "asc" | "desc" | null, mode: DataGridSortMode = "database") {

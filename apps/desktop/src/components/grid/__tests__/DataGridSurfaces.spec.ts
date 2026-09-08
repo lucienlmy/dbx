@@ -101,6 +101,7 @@ import DataGridQueryControls from "@/components/grid/DataGridQueryControls.vue";
 import DataGridSearchBar from "@/components/grid/DataGridSearchBar.vue";
 
 const dataGridSource = readFileSync("apps/desktop/src/components/grid/DataGrid.vue", "utf8");
+const dataGridCellDetailEditSource = readFileSync("apps/desktop/src/composables/useDataGridCellDetailEdit.ts", "utf8");
 const cellDetailPanelSource = readFileSync("apps/desktop/src/components/grid/DataGridCellDetailPanel.vue", "utf8");
 const cellDetailHeaderSource = readFileSync("apps/desktop/src/components/grid/DataGridCellDetailHeader.vue", "utf8");
 const globalsCss = readFileSync("apps/desktop/src/styles/globals.css", "utf8");
@@ -1636,8 +1637,8 @@ describe("cell detail surfaces", () => {
   });
 
   it("snapshots comparison values before opening and suppresses modal-induced blur commits", () => {
-    expect(dataGridSource).toContain("detailValueDiffSnapshot.value = snapshot;");
-    expect(dataGridSource).toContain("detailValueDiffOpen.value = true;");
+    expect(dataGridCellDetailEditSource).toContain("detailValueDiffSnapshot.value = snapshot;");
+    expect(dataGridCellDetailEditSource).toContain("detailValueDiffOpen.value = true;");
     expect(dataGridSource).toContain("if (!detailValueDiffOpen.value) commitValueEditorEdit();");
     expect(dataGridSource).toContain(':disabled="!canCompareDetailJson" @mousedown.prevent @click="openDetailJsonCompare"');
     expect(dataGridSource).toContain('v-model:open="detailValueDiffOpen" :snapshot="detailValueDiffSnapshot"');
