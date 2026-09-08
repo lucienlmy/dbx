@@ -1848,6 +1848,19 @@ export async function loadMaxAgentTurns(): Promise<number> {
   return get("/api/app-settings/max-agent-turns");
 }
 
+export async function loadSqlFileUploadMaxBytes(): Promise<number> {
+  return get("/api/app-settings/sql-file-upload-max-bytes");
+}
+
+export async function saveSqlFileUploadMaxMb(sqlFileUploadMaxMb: number): Promise<void> {
+  const res = await fetch(apiUrl("/api/app-settings/sql-file-upload-max-bytes"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sqlFileUploadMaxMb }),
+  });
+  if (!res.ok) throw await backendResponseError(res);
+}
+
 export async function saveMaxAgentTurns(maxAgentTurns: number): Promise<void> {
   const res = await fetch(apiUrl("/api/app-settings/max-agent-turns"), {
     method: "PUT",
@@ -2270,11 +2283,11 @@ export async function pendingOpenAiConfigLinks(): Promise<string[]> {
   return [];
 }
 
-export async function readExternalSqlFile(_path: string): Promise<string> {
+export async function readExternalSqlFile(_path: string, _maxSizeBytes?: number): Promise<string> {
   throw new Error("Opening external SQL file paths is only available in the desktop app");
 }
 
-export async function readExternalSqlFileSnapshot(_path: string): Promise<import("@/lib/backend/tauri").ExternalSqlFileSnapshot> {
+export async function readExternalSqlFileSnapshot(_path: string, _maxSizeBytes?: number): Promise<import("@/lib/backend/tauri").ExternalSqlFileSnapshot> {
   throw new Error("Opening external SQL file paths is only available in the desktop app");
 }
 

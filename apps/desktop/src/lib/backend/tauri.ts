@@ -717,6 +717,14 @@ export async function loadMaxAgentTurns(): Promise<number> {
   return invoke("load_max_agent_turns");
 }
 
+export async function loadSqlFileUploadMaxBytes(): Promise<number> {
+  return 200 * 1024 * 1024;
+}
+
+export async function saveSqlFileUploadMaxMb(_sqlFileUploadMaxMb: number): Promise<void> {
+  // No-op on desktop: SQL files are streamed directly from disk, no server upload cap applies.
+}
+
 export async function saveMaxAgentTurns(maxAgentTurns: number): Promise<void> {
   return invoke("save_max_agent_turns", { maxAgentTurns });
 }
@@ -970,16 +978,16 @@ export type ExternalSqlFileStatus = { kind: "present"; sizeBytes: number; modifi
 
 export type ExternalSqlFileWriteResult = { kind: "written"; version: ExternalSqlFileVersion } | { kind: "conflict"; currentVersion: ExternalSqlFileVersion } | { kind: "missing" };
 
-export async function readExternalSqlFileSnapshot(path: string): Promise<ExternalSqlFileSnapshot> {
-  const result = await invoke<{ kind: "content"; content: string; version: ExternalSqlFileVersion } | { kind: "tooLarge"; sizeBytes: number; maxSizeBytes: number }>("read_external_sql_file", { path });
+export async function readExternalSqlFileSnapshot(path: string, maxSizeBytes?: number): Promise<ExternalSqlFileSnapshot> {
+  const result = await invoke<{ kind: "content"; content: string; version: ExternalSqlFileVersion } | { kind: "tooLarge"; sizeBytes: number; maxSizeBytes: number }>("read_external_sql_file", { path, maxSizeBytes });
   if (result.kind === "tooLarge") {
     throw new ExternalSqlFileTooLargeError(result.sizeBytes, result.maxSizeBytes);
   }
   return { content: result.content, version: result.version };
 }
 
-export async function readExternalSqlFile(path: string): Promise<string> {
-  return (await readExternalSqlFileSnapshot(path)).content;
+export async function readExternalSqlFile(path: string, maxSizeBytes?: number): Promise<string> {
+  return (await readExternalSqlFileSnapshot(path, maxSizeBytes)).content;
 }
 
 export async function inspectExternalSqlFile(path: string): Promise<ExternalSqlFileStatus> {
