@@ -364,14 +364,14 @@ const DataGridInsertRowsDialog = defineAsyncComponent(() => import("@/components
 const ExportProgressDialog = defineAsyncComponent(() => import("@/components/export/ExportProgressDialog.vue"));
 const FORMATTED_JSON_EDIT_WARNING_COUNT_STORAGE_KEY = "dbx-cell-detail-formatted-json-edit-warning-count";
 const FORMATTED_JSON_EDIT_WARNING_MAX_COUNT = 3;
-let largeValueRuntime: ReturnType<typeof useDataGridLargeValues>;
+let largeValueRuntime: ReturnType<typeof useDataGridLargeValues> | undefined;
 
 function scheduleVisibleLargeValuePreviewHydration(delay = 150) {
-  largeValueRuntime.scheduleVisibleLargeValuePreviewHydration(delay);
+  largeValueRuntime?.scheduleVisibleLargeValuePreviewHydration(delay);
 }
 
 async function hydrateLargeValueCell(rowId: number, columnIndex: number): Promise<boolean> {
-  return largeValueRuntime.hydrateLargeValueCell(rowId, columnIndex);
+  return largeValueRuntime?.hydrateLargeValueCell(rowId, columnIndex) ?? false;
 }
 
 const { t } = useI18n();
@@ -3503,7 +3503,7 @@ const editor = useDataGridEditor({
   cacheKey: computed(() => props.pendingStateKey ?? props.cacheKey),
   onResultPayloadMutated: () => queryStore.invalidateResultEstimateForPayload(props.result),
   refreshSavedRows,
-  onCellValueChanged: (rowId, columnIndex) => largeValueRuntime.invalidateVisibleLargeValuePreviewCell(rowId, columnIndex),
+  onCellValueChanged: (rowId, columnIndex) => largeValueRuntime?.invalidateVisibleLargeValuePreviewCell(rowId, columnIndex),
   prepareFullReload,
   emit,
 });

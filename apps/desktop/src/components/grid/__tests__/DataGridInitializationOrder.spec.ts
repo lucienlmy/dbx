@@ -21,4 +21,10 @@ describe("DataGrid setup initialization order", () => {
     expect(filterPreviewDeclaration).toBeGreaterThan(canUseWhereSearchDeclaration);
     expect(filterPreviewWatcher).toBeGreaterThan(filterPreviewDeclaration);
   });
+
+  it("does not expose an uninitialized large-value runtime to startup callbacks", () => {
+    expect(dataGridSource).toContain("let largeValueRuntime: ReturnType<typeof useDataGridLargeValues> | undefined;");
+    expect(dataGridSource).toContain("largeValueRuntime?.scheduleVisibleLargeValuePreviewHydration(delay)");
+    expect(dataGridSource).toContain("largeValueRuntime?.hydrateLargeValueCell(rowId, columnIndex) ?? false");
+  });
 });
