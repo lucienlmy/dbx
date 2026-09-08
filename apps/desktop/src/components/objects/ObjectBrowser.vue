@@ -155,7 +155,7 @@ import { createSidePanelRequestGuard } from "@/lib/table/sidePanelRequestGuard";
 import { runBatchTableTruncate } from "@/lib/table/batchTableTruncate";
 import { tableColumnDefaultDisplayValue } from "@/lib/table/tableColumnDefaultPresentation";
 import { gaussdbMTypeDisplayName } from "@/lib/table/postgresDataTypeHelp";
-import { cacheObjectBrowserRows, createObjectBrowserRowsCacheWriteToken, getCachedObjectBrowserRows, type ObjectBrowserRowsCacheScope, type ObjectBrowserRowsCacheWriteToken } from "@/lib/table/objectBrowserRowsCache";
+import { cacheObjectBrowserRows, createObjectBrowserRowsCacheWriteToken, getCachedObjectBrowserRowsForScaffold, type ObjectBrowserRowsCacheScope, type ObjectBrowserRowsCacheWriteToken } from "@/lib/table/objectBrowserRowsCache";
 import { createObjectBrowserRowsLoadGuard, type ObjectBrowserRowsLoadHandle } from "@/lib/table/objectBrowserRowsLoadGuard";
 import { loadObjectDdl, type ObjectDdlRequest } from "@/lib/metadata/objectDdlCache";
 import { loadObjectMetadataFacet } from "@/lib/metadata/objectMetadataCache";
@@ -211,6 +211,8 @@ const sortKey = ref<ObjectBrowserSortKey>("name");
 const sortDirection = ref<ObjectBrowserSortDirection>("asc");
 const loadingSchemas = ref(false);
 const loadingObjects = ref(false);
+const refreshingObjects = ref(false);
+const scaffoldRefreshError = ref("");
 const sourceLoading = ref(false);
 const sourceContent = ref("");
 const sourceError = ref("");
@@ -2815,22 +2817,57 @@ watch([() => props.initialEventName, () => props.initialEventOpenRequestId, () =
   openInitialEventIfNeeded();
 });
 
-async function loadObjects(options?: { allowCached?: boolean }) {
+async function loadObjects(options?: { allowCached?: boolean; preserveExistingRows?: boolean }) {
   error.value = "";
+  // A new load supersedes any in-flight one, so reset the transient refresh flags
+  // on entry. A superseded request's finally() can no longer run (the guard's
+  // epoch moved on) and would otherwise leave refreshingObjects stuck spinning
+  // the toolbar icon — the newest request owns the spinner state from here.
+  loadingObjects.value = false;
+  refreshingObjects.value = false;
+  scaffoldRefreshError.value = "";
+  // True when we are revalidating on top of visible rows (a stale-cache scaffold, or a
+  // same-instance refresh) — a failure then keeps the rows and raises a non-blocking
+  // banner instead of replacing the whole list with a full-area error.
+  let scaffoldRefresh = false;
   const schema = needsSchema.value ? selectedSchema.value || "" : props.database;
   const request = objectBrowserRowsLoadGuard.start(objectBrowserRowsCacheScope(schema));
   const cacheWriteToken = createObjectBrowserRowsCacheWriteToken(request.scope);
-  if (options?.allowCached) {
-    const cachedRows = getCachedObjectBrowserRows(request.scope);
-    if (cachedRows) {
-      applyObjectBrowserRows(cachedRows);
-      finishObjectBrowserRowsLoad();
-      return;
+
+  // finishObjectBrowserRowsLoad() is idempotent, but keep the default-filter /
+  // viewport restores to a single run per load so the events-preferred-filter case
+  // doesn't leave preserveObjectFilterScrollOnce latched across an extra call.
+  let finished = false;
+  const finishOnce = () => {
+    if (finished) return;
+    finished = true;
+    finishObjectBrowserRowsLoad();
+  };
+
+  const cached = options?.allowCached ? getCachedObjectBrowserRowsForScaffold(request.scope) : undefined;
+  if (cached) {
+    // Scaffold the last-known rows so returning to this tab shows them instantly
+    // instead of flashing an empty list. A fresh entry (< TTL) is authoritative on
+    // its own; a stale one is presented and then revalidated in the background.
+    applyObjectBrowserRows(cached.rows);
+    finishOnce();
+    if (!cached.stale) return;
+    scaffoldRefresh = true;
+    refreshingObjects.value = true;
+  } else {
+    // No scaffold: first load in this scope, cache invalidated by a DDL mutation,
+    // or the caller wants a true reload. If the caller explicitly asked to keep the
+    // current rows (same-instance refresh) and rows exist, refresh without blanking.
+    const keepExisting = options?.preserveExistingRows && rows.value.length > 0;
+    if (keepExisting) {
+      scaffoldRefresh = true;
+      refreshingObjects.value = true;
+    } else {
+      loadingObjects.value = true;
+      rows.value = [];
     }
   }
 
-  loadingObjects.value = true;
-  rows.value = [];
   try {
     const nextRows = props.connection.db_type === "mongodb" ? await loadMongoObjectBrowserRows(request.scope.connectionId, request.scope.database) : await loadSqlObjectBrowserRows(request);
     if (!objectBrowserRowsLoadGuard.isCurrent(request)) return;
@@ -2839,9 +2876,19 @@ async function loadObjects(options?: { allowCached?: boolean }) {
     if (props.connection.db_type !== "mongodb") void loadObjectStatistics(request, cacheWriteToken, cachedAt);
   } catch (e: any) {
     if (!objectBrowserRowsLoadGuard.isCurrent(request)) return;
-    error.value = translateBackendError(t, e);
+    // Keep visible rows on a background revalidate failure — surface a lightweight
+    // banner rather than replacing the scaffold (or same-instance refresh) list.
+    if (scaffoldRefresh) {
+      scaffoldRefreshError.value = translateBackendError(t, e);
+    } else {
+      error.value = translateBackendError(t, e);
+    }
   } finally {
-    if (objectBrowserRowsLoadGuard.isCurrent(request)) finishObjectBrowserRowsLoad();
+    if (objectBrowserRowsLoadGuard.isCurrent(request)) {
+      loadingObjects.value = false;
+      refreshingObjects.value = false;
+      finishOnce();
+    }
   }
 }
 
@@ -2894,15 +2941,15 @@ function normalizeStatisticNumber(value: number | null | undefined): number | nu
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-async function reload(options?: { allowCachedObjects?: boolean; contextEpoch?: number }) {
+async function reload(options?: { allowCachedObjects?: boolean; contextEpoch?: number; preserveExistingRows?: boolean }) {
   const epoch = options?.contextEpoch ?? objectBrowserRowsLoadGuard.invalidate();
   if (!(await loadSchemas(epoch))) return;
   if (!objectBrowserRowsLoadGuard.isEpochCurrent(epoch)) return;
-  await loadObjects({ allowCached: options?.allowCachedObjects });
+  await loadObjects({ allowCached: options?.allowCachedObjects, preserveExistingRows: options?.preserveExistingRows });
 }
 
 function refresh(): boolean {
-  void reload();
+  void reload({ preserveExistingRows: true });
   void refreshActiveTableInfo();
   return true;
 }
@@ -3302,7 +3349,7 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
         <Square v-else class="h-3.5 w-3.5" />
       </Button>
       <Button variant="ghost" size="icon" class="h-7 w-7" :title="refreshTooltip" :disabled="loadingObjects" @click="refresh">
-        <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': loadingObjects }" />
+        <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': loadingObjects || refreshingObjects }" />
       </Button>
       <Button v-if="canPasteTableClipboard()" variant="ghost" size="sm" class="h-7 px-2 text-xs" @click="openPasteTableDialog">
         <Clipboard class="mr-1.5 h-3.5 w-3.5" />
@@ -3382,6 +3429,10 @@ function getObjectBrowserMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
       </Button>
     </div>
 
+    <div v-if="scaffoldRefreshError" role="status" class="flex h-8 shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/5 px-3 text-xs text-destructive">
+      <RefreshCw class="h-3 w-3 shrink-0" />
+      <span class="min-w-0 truncate">{{ scaffoldRefreshError }}</span>
+    </div>
     <div v-if="loadingObjects" class="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
       <Loader2 class="h-4 w-4 animate-spin" />
       {{ t("objects.loading") }}
