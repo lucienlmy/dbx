@@ -377,7 +377,7 @@ import { reserveDataGridHeaderLine } from "@/lib/dataGrid/dataGridHeaderLayout";
 import { buildColumnIndexMap, columnIndexColorClass, columnIndexMetadataRequestCurrent, columnIndexNameKey, columnIndexTableIdentity, type ColumnIndexKind } from "@/lib/dataGrid/dataGridColumnIndexIcon";
 import { supportsTableStructureEditing } from "@/lib/database/databaseCapabilities";
 import { rememberDataGridConditionHistory } from "@/lib/dataGrid/dataGridConditionHistory";
-import { restoreDataGridLocalColumnFilters, serializeDataGridLocalColumnFilters } from "@/lib/dataGrid/dataGridLocalColumnFilterState";
+import { buildDataGridLocalFilterOptions, dataGridLocalFilterKey, dataGridLocalFilterLabel, restoreDataGridLocalColumnFilters, rowMatchesDataGridLocalColumnFilters, serializeDataGridLocalColumnFilters, type DataGridLocalFilterOption } from "@/lib/dataGrid/dataGridLocalColumnFilterState";
 import { effectiveDatabaseTypeForConnection, gaussdbCountQueryDopHint } from "@/lib/database/jdbcDialect";
 import { mongoCollectionSupportsIndexes, supportsMongoIndexMutations } from "@/lib/mongo/mongoCapabilities";
 import { refreshLoadedMongoIndexes } from "@/lib/mongo/mongoIndexMetadata";
@@ -1061,12 +1061,7 @@ const conditionHistoryScope = computed(() => ({
   tableName: props.tableMeta?.tableName,
 }));
 type LocalFilterMode = "local" | "server";
-type LocalFilterOption = {
-  key: string;
-  label: string;
-  count: number | null;
-  value: CellValue;
-};
+type LocalFilterOption = DataGridLocalFilterOption;
 
 type LocalColumnFilterDraft = {
   columnIndex: number;
@@ -1300,14 +1295,11 @@ const savedCustomFormatters = computed(() => {
 });
 
 function localFilterKey(value: CellValue): string {
-  if (value === null) return "__dbx_null__";
-  if (typeof value === "boolean") return `bool:${value}`;
-  if (typeof value === "number") return `num:${value}`;
-  return `str:${String(value)}`;
+  return dataGridLocalFilterKey(value);
 }
 
 function localFilterLabel(value: CellValue, columnIndex: number): string {
-  return value === null ? "NULL" : formatCellCached(value, columnIndex);
+  return dataGridLocalFilterLabel(value, columnIndex, formatCellCached);
 }
 
 function localFilterActive(colIdx: number): boolean {
@@ -1345,9 +1337,7 @@ const localFilterSummaries = computed(() =>
 );
 
 function rowMatchesLocalColumnFilters(data: CellValue[]): boolean {
-  const activeEntries = Object.entries(localColumnFilters.value).filter(([, selected]) => selected.size > 0);
-  if (activeEntries.length === 0) return true;
-  return activeEntries.every(([columnIndex, selected]) => selected.has(localFilterKey(data[Number(columnIndex)] ?? null)));
+  return rowMatchesDataGridLocalColumnFilters(data, localColumnFilters.value);
 }
 
 const localFilteredRows = computed(() => {
@@ -1366,36 +1356,12 @@ const localFilteredRows = computed(() => {
 });
 
 function buildLocalFilterOptions(columnIndex: number): LocalFilterOption[] {
-  const byKey = new Map<string, LocalFilterOption>();
-  const addValue = (value: CellValue) => {
-    const key = localFilterKey(value);
-    const current = byKey.get(key);
-    if (current) {
-      current.count = (current.count ?? 0) + 1;
-    } else {
-      byKey.set(key, {
-        key,
-        label: localFilterLabel(value, columnIndex),
-        count: 1,
-        value,
-      });
-    }
-  };
-
-  for (const [sourceIndex, row] of props.result.rows.entries()) {
-    addValue(rowDataWithChanges(row, sourceIndex)[columnIndex] ?? null);
-  }
-  for (const row of newRows.value) {
-    addValue(row[columnIndex] ?? null);
-  }
-
-  return [...byKey.values()].sort((a, b) => {
-    if (a.value === null && b.value !== null) return -1;
-    if (a.value !== null && b.value === null) return 1;
-    return a.label.localeCompare(b.label, undefined, {
-      numeric: true,
-      sensitivity: "base",
-    });
+  return buildDataGridLocalFilterOptions({
+    rows: props.result.rows,
+    newRows: newRows.value,
+    columnIndex,
+    getRowData: rowDataWithChanges,
+    formatValue: formatCellCached,
   });
 }
 
