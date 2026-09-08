@@ -465,8 +465,8 @@ export const AI_PROVIDER_PARTNER_PRESETS: readonly AiPartnerProviderPreset[] = [
     apiStyle: "completions",
     authMethod: "bearer",
     requiresApiKey: true,
-    websiteUrl: "https://api.hualong.online/",
-    apiKeyUrl: "https://api.hualong.online/",
+    websiteUrl: "https://api.hualong.online/register?promo=DBX%26HUALONG",
+    apiKeyUrl: "https://api.hualong.online/register?promo=DBX%26HUALONG",
     descriptionKey: "ai.hualongDescription",
   },
 ];
