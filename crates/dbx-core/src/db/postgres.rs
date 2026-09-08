@@ -6337,6 +6337,13 @@ fn postgres_set_single_schema_search_path_sql(schema: &str, context: PostgresSea
     format!("SET{scope} search_path TO {}", pg_quote_ident(schema))
 }
 
+/// Whether a trimmed search_path element is the `"$user"` placeholder that
+/// PostgreSQL accepts in `SET search_path` but Redshift rejects with a syntax
+/// error; identifiers merely containing the substring do not count.
+fn is_postgres_user_placeholder(element: &str) -> bool {
+    matches!(element, "$user" | "\"$user\"")
+}
+
 fn postgres_set_preserved_search_path_sql(
     schema: &str,
     context: PostgresSearchPathContext,
@@ -6351,9 +6358,28 @@ fn postgres_set_preserved_search_path_sql(
         ""
     };
     let configured = baseline.configured.trim();
+    // Redshift rejects the "$user" placeholder inside `SET search_path` even
+    // though `current_setting('search_path')` reports it, so any preserved-path
+    // statement containing the element fails with a syntax error. Drop the
+    // literal `"$user"` / `$user` elements (never a plain replace, which would
+    // also mangle ordinary identifiers containing that substring); keeping the
+    // placeholder is pointless while switching schemas anyway because the
+    // selected schema is already prepended first.
+    let configured_elements: Vec<&str> = configured.split(',').map(str::trim).collect();
+    let drops_user_placeholder = configured_elements.iter().any(|element| is_postgres_user_placeholder(element));
+    let configured = if drops_user_placeholder {
+        configured_elements
+            .iter()
+            .filter(|element| !is_postgres_user_placeholder(element))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        configured.to_string()
+    };
     let selected_schema = pg_quote_ident(schema);
     let mut path = if baseline.first_resolved_schema.as_deref() == Some(schema) {
-        configured.to_string()
+        configured
     } else if configured.is_empty() {
         selected_schema.clone()
     } else {
@@ -6369,7 +6395,15 @@ fn postgres_set_preserved_search_path_sql(
 }
 
 fn postgres_requires_single_schema_search_path(error: &str) -> bool {
-    error.to_ascii_lowercase().contains("does not support search_path with multiple names")
+    let error = error.to_ascii_lowercase();
+    if error.contains("does not support search_path with multiple names") {
+        return true;
+    }
+    // Redshift rejects incompatible search_path elements (e.g. "$user") with
+    // `ERROR: syntax error at or near "$" in context "search_path TO ..."`.
+    // Only treat it as a single-schema case when the very same message mentions
+    // search_path, so unrelated syntax errors near "$" fall through untouched.
+    error.contains("syntax error at or near \"$\"") && error.contains("search_path")
 }
 
 fn postgres_single_schema_clients() -> &'static Mutex<HashMap<usize, Weak<deadpool_postgres::StatementCache>>> {
@@ -9353,13 +9387,13 @@ mod tests {
     #[test]
     fn postgres_search_path_prepends_selected_schema_without_dropping_configured_items() {
         let baseline = PostgresSearchPathBaseline {
-            configured: "\"$user\", extensions, public".to_string(),
+            configured: "extensions, public".to_string(),
             first_resolved_schema: Some("public".to_string()),
             has_explicit_pg_catalog: false,
         };
         assert_eq!(
             postgres_set_preserved_search_path_sql("application", PostgresSearchPathContext::Query, &baseline),
-            "SET search_path TO \"application\", \"$user\", extensions, public, pg_catalog"
+            "SET search_path TO \"application\", extensions, public, pg_catalog"
         );
         assert_eq!(
             postgres_set_preserved_search_path_sql(
@@ -9367,7 +9401,70 @@ mod tests {
                 PostgresSearchPathContext::LocalQueryTransaction,
                 &baseline,
             ),
-            "SET LOCAL search_path TO \"application\", \"$user\", extensions, public, pg_catalog"
+            "SET LOCAL search_path TO \"application\", extensions, public, pg_catalog"
+        );
+    }
+
+    #[test]
+    fn postgres_search_path_drops_redshift_user_placeholder_elements() {
+        let baseline = PostgresSearchPathBaseline {
+            configured: "\"$user\", public".to_string(),
+            first_resolved_schema: Some("public".to_string()),
+            has_explicit_pg_catalog: false,
+        };
+        assert_eq!(
+            postgres_set_preserved_search_path_sql("dwd_views", PostgresSearchPathContext::Query, &baseline),
+            "SET search_path TO \"dwd_views\", public, pg_catalog"
+        );
+
+        let bare_baseline = PostgresSearchPathBaseline {
+            configured: "$user, public".to_string(),
+            first_resolved_schema: Some("public".to_string()),
+            has_explicit_pg_catalog: false,
+        };
+        assert_eq!(
+            postgres_set_preserved_search_path_sql("dwd_views", PostgresSearchPathContext::Query, &bare_baseline),
+            "SET search_path TO \"dwd_views\", public, pg_catalog"
+        );
+    }
+
+    #[test]
+    fn postgres_search_path_user_placeholder_only_baseline_falls_back_to_selected_schema() {
+        let baseline = PostgresSearchPathBaseline {
+            configured: "\"$user\"".to_string(),
+            first_resolved_schema: Some("public".to_string()),
+            has_explicit_pg_catalog: false,
+        };
+        assert_eq!(
+            postgres_set_preserved_search_path_sql("dwd_views", PostgresSearchPathContext::Query, &baseline),
+            "SET search_path TO \"dwd_views\", pg_catalog"
+        );
+
+        let explicit_catalog_baseline = PostgresSearchPathBaseline {
+            configured: "$user".to_string(),
+            first_resolved_schema: Some("public".to_string()),
+            has_explicit_pg_catalog: true,
+        };
+        assert_eq!(
+            postgres_set_preserved_search_path_sql(
+                "dwd_views",
+                PostgresSearchPathContext::Query,
+                &explicit_catalog_baseline
+            ),
+            "SET search_path TO \"dwd_views\""
+        );
+    }
+
+    #[test]
+    fn postgres_search_path_keeps_identifiers_containing_user_placeholder_substrings() {
+        let baseline = PostgresSearchPathBaseline {
+            configured: "my$user_schema, \"$user_backup\", public".to_string(),
+            first_resolved_schema: Some("public".to_string()),
+            has_explicit_pg_catalog: false,
+        };
+        assert_eq!(
+            postgres_set_preserved_search_path_sql("dwd_views", PostgresSearchPathContext::Query, &baseline),
+            "SET search_path TO \"dwd_views\", my$user_schema, \"$user_backup\", public, pg_catalog"
         );
     }
 
@@ -9390,6 +9487,16 @@ mod tests {
             "ERROR: Hologres does not support search_path with multiple names: admaterial."
         ));
         assert!(!postgres_requires_single_schema_search_path("ERROR: permission denied for schema admaterial"));
+    }
+
+    #[test]
+    fn postgres_single_schema_fallback_matches_redshift_user_placeholder_syntax_error() {
+        assert!(postgres_requires_single_schema_search_path(
+            "ERROR: syntax error at or near \"$\" in context \"search_path TO \"dwd_views\", \"$user\", public\", at line 1"
+        ));
+        assert!(!postgres_requires_single_schema_search_path(
+            "ERROR: syntax error at or near \"$\" in context \"SELECT * FROM t WHERE id = $1\", at line 1"
+        ));
     }
 
     #[test]
