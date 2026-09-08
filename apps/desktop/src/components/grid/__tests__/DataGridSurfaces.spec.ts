@@ -102,6 +102,7 @@ import DataGridSearchBar from "@/components/grid/DataGridSearchBar.vue";
 
 const dataGridSource = readFileSync("apps/desktop/src/components/grid/DataGrid.vue", "utf8");
 const cellDetailPanelSource = readFileSync("apps/desktop/src/components/grid/DataGridCellDetailPanel.vue", "utf8");
+const cellDetailHeaderSource = readFileSync("apps/desktop/src/components/grid/DataGridCellDetailHeader.vue", "utf8");
 const globalsCss = readFileSync("apps/desktop/src/styles/globals.css", "utf8");
 
 function detail(patch: Partial<DataGridCellDetail> = {}): DataGridCellDetail {
@@ -1367,9 +1368,7 @@ describe("DataGridTextFilterWorkbench", () => {
 
 describe("cell detail surfaces", () => {
   it("keeps detail tabs and editor actions usable when the panel narrows", () => {
-    const tabsStart = dataGridSource.indexOf('<Tabs v-model="activeCellDetailTab"');
-    const panelStart = dataGridSource.indexOf("<DataGridCellDetailPanel", tabsStart);
-    const tabsHeader = dataGridSource.slice(tabsStart, panelStart);
+    const tabsHeader = cellDetailHeaderSource;
     const tabViewport = tabsHeader.match(/<div class="([^"]*overflow-x-auto[^"]*)">\s*<TabsList/);
     const tabList = tabsHeader.match(/<TabsList class="([^"]+)">/);
     const triggerClasses = Array.from(tabsHeader.matchAll(/<TabsTrigger\b[^>]*class="([^"]+)"/g), ([, classes]) => classes.split(/\s+/));
