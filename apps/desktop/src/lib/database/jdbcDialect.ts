@@ -2,7 +2,7 @@ import type { ConnectionConfig, DatabaseType } from "@/types/database";
 import { isSchemaAware, spannerObjectTreeSchema, usesDatabaseObjectTreeMode, usesTreeSchemaMode } from "@/lib/database/databaseFeatureSupport";
 import type { CodeMirrorSqlDialectName } from "@/lib/editor/codemirrorSqlDialect";
 
-type JdbcDialectConnection = Partial<Pick<ConnectionConfig, "db_type" | "driver_profile" | "driver_label" | "connection_string" | "url_params" | "jdbc_driver_class" | "jdbc_driver_paths" | "database_info" | "external_config">>;
+type JdbcDialectConnection = Partial<Pick<ConnectionConfig, "db_type" | "driver_profile" | "driver_label" | "connection_string" | "url_params" | "jdbc_driver_class" | "jdbc_driver_paths" | "database_info" | "external_config" | "username">>;
 
 export type GaussdbIdentifierQuoteStyle = "auto" | "double" | "backtick";
 export type GaussdbConnectionMode = "native" | "m-jdbc";
@@ -262,6 +262,21 @@ export function connectionObjectTreeQuerySchema(connection: JdbcDialectConnectio
   // established "resolve it on the backend" value used by the completion paths.
   if (!schema && databaseNameIsNotASchema(type)) return "";
   return schema || database;
+}
+
+/**
+ * Schema sent with object-list (listObjects) requests. Dameng's object SQL
+ * filters on a fixed `WHERE o.OWNER = ?`, so a blank schema matches nothing and
+ * the object tab renders empty when the schema could not be resolved (#8301).
+ * Mirror the completion path (connectionStore.listCompletionColumns) and fall
+ * back to the connection username — uppercased, the Oracle-family storage
+ * convention for unquoted Dameng users. Other Oracle-family types keep the
+ * blank schema so the backend resolves the current schema itself.
+ */
+export function objectListSchemaForConnection(connection: JdbcDialectConnection | undefined, schema?: string): string {
+  if (schema) return schema;
+  if (effectiveDatabaseTypeForConnection(connection) !== "dameng") return "";
+  return connection?.username?.trim().toUpperCase() || "";
 }
 
 /**

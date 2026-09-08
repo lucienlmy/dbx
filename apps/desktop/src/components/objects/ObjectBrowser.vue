@@ -70,7 +70,7 @@ import type { ColumnInfo, ConnectionConfig, ConstraintInfo, ForeignKeyInfo, Inde
 import { sortTablesByFkDependency, type TableWithFk } from "@/lib/table/tableDependencySort";
 import { isSchemaAware, supportsTableVacuum, supportsTransfer } from "@/lib/database/databaseCapabilities";
 import { supportsSchemaDiagram, supportsTableImport, supportsTableStructureEditing, supportsTableTruncate } from "@/lib/database/databaseFeatureSupport";
-import { codeMirrorSqlDialect, connectionObjectTreeNodeSchema, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection, tableStructureDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
+import { codeMirrorSqlDialect, connectionObjectTreeNodeSchema, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection, objectListSchemaForConnection, tableStructureDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { getTableMetadataCapabilities, type TableMetadataCapabilities } from "@/lib/table/tableMetadataCapabilities";
 import { constraintsForConstraintsTab } from "@/lib/table/constraintPresentation";
 import { buildTableSelectSql } from "@/lib/table/tableSelectSql";
@@ -2817,6 +2817,10 @@ watch([() => props.initialEventName, () => props.initialEventOpenRequestId, () =
   openInitialEventIfNeeded();
 });
 
+// 达梦的对象列表 SQL 固定 `WHERE o.OWNER = ?`（DamengAgent），空 schema 必然
+// 匹配 0 行；schema 解析失败（loadSchemas 抛错或返回空列表）时标签会整体空白
+// (#8301)。经 objectListSchemaForConnection 回退到连接用户名（大写），仅限
+// 达梦；oracle/oceanbase-oracle 维持空 schema 由后端解析当前 schema。
 async function loadObjects(options?: { allowCached?: boolean; preserveExistingRows?: boolean }) {
   error.value = "";
   // A new load supersedes any in-flight one, so reset the transient refresh flags
@@ -2830,7 +2834,7 @@ async function loadObjects(options?: { allowCached?: boolean; preserveExistingRo
   // same-instance refresh) — a failure then keeps the rows and raises a non-blocking
   // banner instead of replacing the whole list with a full-area error.
   let scaffoldRefresh = false;
-  const schema = needsSchema.value ? selectedSchema.value || "" : props.database;
+  const schema = needsSchema.value ? objectListSchemaForConnection(props.connection, selectedSchema.value) : props.database;
   const request = objectBrowserRowsLoadGuard.start(objectBrowserRowsCacheScope(schema));
   const cacheWriteToken = createObjectBrowserRowsCacheWriteToken(request.scope);
 
@@ -2943,7 +2947,15 @@ function normalizeStatisticNumber(value: number | null | undefined): number | nu
 
 async function reload(options?: { allowCachedObjects?: boolean; contextEpoch?: number; preserveExistingRows?: boolean }) {
   const epoch = options?.contextEpoch ?? objectBrowserRowsLoadGuard.invalidate();
-  if (!(await loadSchemas(epoch))) return;
+  try {
+    if (!(await loadSchemas(epoch))) return;
+  } catch (e) {
+    // listSchemas 失败（如共享连接上 SET SCHEMA 后的二次元数据请求）时，
+    // loadSchemas 不会触碰 selectedSchema，这里也不清空它：保留 props.schema
+    // 或用户已选值，继续尝试加载对象列表（达梦走用户名回退），避免标签静默
+    // 空白 (#8301)。对象列表若同样失败，loadObjects 自身的 catch 会展示错误。
+    console.warn("[ObjectBrowser] loadSchemas failed, keeping selected schema for", props.connection.id, e);
+  }
   if (!objectBrowserRowsLoadGuard.isEpochCurrent(epoch)) return;
   await loadObjects({ allowCached: options?.allowCachedObjects, preserveExistingRows: options?.preserveExistingRows });
 }
