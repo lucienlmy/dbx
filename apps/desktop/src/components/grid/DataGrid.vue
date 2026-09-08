@@ -2091,7 +2091,8 @@ const columnStructureSignature = computed(() => createDataGridColumnStructureSig
 // Bumped once the configured header font is ready, so widths measured against a temporary fallback
 // font get re-measured without reacting to unrelated fonts loaded elsewhere in the application.
 const dataGridFontReadyTick = ref(0);
-const columnHeaderMeasurementKey = computed(() => [tableFontSize.value, tableFontFamily.value, dataGridFontReadyTick.value]);
+const columnFormatterReadyTick = ref(0);
+const columnHeaderMeasurementKey = computed(() => [tableFontSize.value, tableFontFamily.value, dataGridFontReadyTick.value, columnFormatterReadyTick.value]);
 let columnHeaderMeasureContext: CanvasRenderingContext2D | null | undefined;
 
 if (typeof document !== "undefined" && document.fonts) {
@@ -2121,8 +2122,10 @@ function measureColumnHeaderText(text: string): number | undefined {
   return Math.ceil(columnHeaderMeasureContext.measureText(text).width);
 }
 
+let columnFormatterForWidth: ((columnIndex: number) => ColumnFormatterConfig | undefined) | undefined;
+
 function columnWidthDisplayValue(value: CellValue, columnIndex: number): CellValue {
-  const formatter = columnFormatter(columnIndex);
+  const formatter = columnFormatterForWidth?.(columnIndex);
   return formatter ? applyColumnFormatter(value, formatter) : value;
 }
 
@@ -2748,8 +2751,6 @@ watch(isScrolling, (scrolling) => {
   }
 });
 
-initColumnWidths();
-watch([visibleColumnIndexes, () => renderedColumnWidths.value.length], () => scheduleColumnLayoutRefresh());
 const localFilterScopeKey = computed(() =>
   [
     props.connectionId ?? "",
@@ -4377,6 +4378,11 @@ const {
   formatForeignKeyCellDisplay,
   toast,
 });
+columnFormatterForWidth = columnFormatter;
+columnFormatterReadyTick.value++;
+
+initColumnWidths();
+watch([visibleColumnIndexes, () => renderedColumnWidths.value.length], () => scheduleColumnLayoutRefresh());
 
 watch(
   () => displayRowCount.value,

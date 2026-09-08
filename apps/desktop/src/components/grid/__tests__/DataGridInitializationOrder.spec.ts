@@ -12,6 +12,15 @@ describe("DataGrid setup initialization order", () => {
     expect(columnResizeInitialization).toBeGreaterThan(tableColumnMetadataDeclaration);
   });
 
+  it("initializes column formatters before measuring formatted column widths", () => {
+    const columnFormatterDeclaration = dataGridSource.indexOf("} = useDataGridColumnFormatter({");
+    const columnWidthInitialization = dataGridSource.lastIndexOf("initColumnWidths();");
+
+    expect(columnFormatterDeclaration).toBeGreaterThanOrEqual(0);
+    expect(columnWidthInitialization).toBeGreaterThan(columnFormatterDeclaration);
+    expect(dataGridSource).toContain("columnFormatterForWidth?.(columnIndex)");
+  });
+
   it("initializes where-search capability before the immediate filter preview watcher", () => {
     const canUseWhereSearchDeclaration = dataGridSource.indexOf("const canUseWhereSearch = computed");
     const filterPreviewDeclaration = dataGridSource.indexOf("const filterPreviewVisible = computed");
