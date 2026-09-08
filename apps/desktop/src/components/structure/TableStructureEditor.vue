@@ -1160,6 +1160,7 @@ let skipNextRefreshVersion = false;
 let restoringDraft = false;
 let syncingDraft = false;
 let draftHydrated = false;
+let lastAppliedInitialTabRequestId: number | undefined;
 let hydratingRestoredDraft = false;
 let structureScrollFrame = 0;
 let structureHorizontalScrollbarThumbLeftPercent = 0;
@@ -1361,6 +1362,7 @@ function createCurrentDraft(initialized = true): TableStructureEditorDraft {
     triggersLoaded: triggersLoaded.value,
     loadedMetadataFacets: [...loadedMetadataFacets],
     scrollPositions: cloneDraftValue(structureScrollPositions.value),
+    appliedInitialTabRequestId: lastAppliedInitialTabRequestId,
     initialized,
   };
 }
@@ -1376,6 +1378,7 @@ function syncDraftToParent() {
 function restoreDraft(draft: TableStructureEditorDraft) {
   restoringDraft = true;
   draftHydrated = false;
+  lastAppliedInitialTabRequestId = draft.appliedInitialTabRequestId;
   activeTab.value = draft.activeTab || "columns";
   // Restore the DDL baseline alongside the edit, otherwise the restored script
   // would read as dirty (or clean) against the wrong reference text.
@@ -3750,14 +3753,17 @@ function unregisterStructureEditorShortcuts() {
 
 onMounted(() => {
   resetState();
-  applyInitialStructureTab();
+  // With an initialized draft the restore below owns the tab (plus any
+  // unconsumed initial tab); applying the stale initial tab first would only
+  // flash the wrong facet and kick its metadata load (#8419).
+  if (!props.draft?.initialized) applyInitialStructureTab();
   applyInitialStructureTarget();
   registerStructureEditorShortcuts();
   void loadDynamicDataTypeOptions();
   if (props.draft?.initialized) {
     restoreDraft(props.draft);
     // A restored draft owns its saved tab unless navigation explicitly requested another one.
-    applyInitialStructureTab(false);
+    applyPendingInitialStructureTab();
     applyInitialStructureTarget();
   }
   structureEditorReady = true;
@@ -3840,9 +3846,21 @@ function resolveStructureMetadataTab(tab: TableInfoTab | undefined, capabilities
 function applyInitialStructureTab(useDefault = true) {
   if (props.initialTab) {
     activeTab.value = resolveStructureMetadataTab(props.initialTab);
+    lastAppliedInitialTabRequestId = props.initialTabRequestId;
   } else if (useDefault) {
     activeTab.value = resolveStructureMetadataTab(undefined);
   }
+}
+
+// The tab's structureInitialTab stays populated after it was consumed once
+// (e.g. the side panel opened the editor on its foreign-keys facet). Replaying
+// it on every remount would override the draft-restored tab the user last
+// selected, so an initial tab only applies again when navigation bumped the
+// request id (#8419).
+function applyPendingInitialStructureTab() {
+  if (!props.initialTab) return;
+  if (props.initialTabRequestId !== undefined && props.initialTabRequestId === lastAppliedInitialTabRequestId) return;
+  applyInitialStructureTab(false);
 }
 
 function initialTargetKey(target: TableStructureEditorTarget): string {

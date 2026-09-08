@@ -1104,6 +1104,8 @@ export interface TableStructureEditorDraft {
   triggersLoaded?: boolean;
   loadedMetadataFacets?: import("@/lib/metadata/objectMetadataCache").ObjectMetadataFacet[];
   scrollPositions?: Partial<Record<TableInfoTab, TableStructureEditorViewport>>;
+  /** Request id of the structureInitialTab the editor already applied; remounts must not replay a consumed initial tab over the restored draft. */
+  appliedInitialTabRequestId?: number;
   initialized: boolean;
 }
 
