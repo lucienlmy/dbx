@@ -2999,6 +2999,7 @@ export default withEnglishFallback({
     editColumn: "Modifica Colonna",
     editIndex: "Modifica Indice",
     refreshChildren: "Aggiorna",
+    collapseAll: "Comprimi tutto",
     expandAll: "Espandi tutto",
     tableNameFilters: "Filtri...",
     tableNameFiltersDescription: "Mostra solo gli oggetti che corrispondono alla lista include, poi nasconde quelli che corrispondono alla lista exclude. Un pattern SQL LIKE per riga.",
