@@ -266,6 +266,199 @@ fn format_pg_money(value: i64) -> String {
     }
 }
 
+/// A `FromSql` adapter for PostgreSQL arrays of any dimension. tokio-postgres's
+/// `Vec<T>` rejects arrays with more than one dimension, and a multi-
+/// dimensional column carries the same array OID as its flat counterpart, so
+/// `'{{1,2},{3,4}}'::int[]` fell through every probe in the array chain and
+/// rendered as NULL (#8457). Renders PostgreSQL's own array literal syntax.
+struct PgNdimArrayLiteral(String);
+
+impl<'a> FromSql<'a> for PgNdimArrayLiteral {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        pg_ndim_array_literal(raw).map(Self).ok_or_else(|| "invalid PostgreSQL array binary value".into())
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.kind(), Kind::Array(_))
+    }
+}
+
+fn pg_ndim_array_literal(raw: &[u8]) -> Option<String> {
+    fn read_i32(raw: &[u8], cursor: &mut usize) -> Option<i32> {
+        let bytes = raw.get(*cursor..*cursor + 4)?.try_into().ok()?;
+        *cursor += 4;
+        Some(i32::from_be_bytes(bytes))
+    }
+
+    let mut cursor = 0usize;
+    let ndim = read_i32(raw, &mut cursor)?;
+    if !(1..=6).contains(&ndim) {
+        return None;
+    }
+    let _null_flags = read_i32(raw, &mut cursor)?;
+    let element_type = Type::from_oid(read_i32(raw, &mut cursor)? as u32);
+    let mut lengths = Vec::with_capacity(ndim as usize);
+    for _ in 0..ndim {
+        let len = read_i32(raw, &mut cursor)?;
+        if len < 0 {
+            return None;
+        }
+        lengths.push(len as usize);
+        let _lower_bound = read_i32(raw, &mut cursor)?;
+    }
+    let total = lengths.iter().try_fold(1usize, |acc, &len| acc.checked_mul(len))?;
+    let mut elements: Vec<Option<&[u8]>> = Vec::with_capacity(total);
+    for _ in 0..total {
+        let len = read_i32(raw, &mut cursor)?;
+        if len < 0 {
+            elements.push(None);
+        } else {
+            let bytes = raw.get(cursor..cursor + len as usize)?;
+            cursor += len as usize;
+            elements.push(Some(bytes));
+        }
+    }
+
+    let mut literal = String::new();
+    pg_ndim_array_group(&lengths, &elements, element_type.as_ref(), &mut literal);
+    Some(literal)
+}
+
+fn pg_ndim_array_group(dims: &[usize], elements: &[Option<&[u8]>], element_type: Option<&Type>, out: &mut String) {
+    out.push('{');
+    if dims.len() == 1 {
+        for (index, element) in elements.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            match element {
+                None => out.push_str("NULL"),
+                Some(bytes) => out.push_str(&pg_ndim_array_element(element_type, bytes)),
+            }
+        }
+    } else {
+        let stride: usize = dims[1..].iter().product();
+        for index in 0..dims[0] {
+            if index > 0 {
+                out.push(',');
+            }
+            pg_ndim_array_group(&dims[1..], &elements[index * stride..(index + 1) * stride], element_type, out);
+        }
+    }
+    out.push('}');
+}
+
+fn pg_ndim_array_element(element_type: Option<&Type>, bytes: &[u8]) -> String {
+    match pg_ndim_array_element_json(element_type, bytes) {
+        serde_json::Value::String(text) => quote_pg_array_element(&text),
+        serde_json::Value::Bool(value) => (if value { "t" } else { "f" }).to_string(),
+        serde_json::Value::Number(number) => number.to_string(),
+        _ => "NULL".to_string(),
+    }
+}
+
+/// Quotes one array element the way `array_out` does: empty strings, NULL-like
+/// text, and anything containing structural characters or whitespace is
+/// double-quoted with embedded quotes and backslashes doubled.
+fn quote_pg_array_element(text: &str) -> String {
+    let needs_quoting = text.is_empty()
+        || text.eq_ignore_ascii_case("null")
+        || text.bytes().any(|b| matches!(b, b'{' | b'}' | b',' | b'"' | b'\\' | b' ' | b'\t' | b'\n' | b'\r'));
+    if !needs_quoting {
+        return text.to_string();
+    }
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('"');
+    for ch in text.chars() {
+        if ch == '"' || ch == '\\' {
+            quoted.push(ch);
+        }
+        quoted.push(ch);
+    }
+    quoted.push('"');
+    quoted
+}
+
+// Direct from_sql calls bypass the codec's accepts() gate, so every probe
+// must check the element type itself before decoding.
+fn pg_ndim_array_element_json(element_type: Option<&Type>, bytes: &[u8]) -> serde_json::Value {
+    let ty = match element_type {
+        Some(ty) => ty,
+        None => return serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned()),
+    };
+    if <bool as FromSql>::accepts(ty) {
+        if let Ok(value) = <bool as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::Bool(value);
+        }
+    }
+    if <i8 as FromSql>::accepts(ty) {
+        if let Ok(value) = <i8 as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::Number(value.into());
+        }
+    }
+    if <i16 as FromSql>::accepts(ty) {
+        if let Ok(value) = <i16 as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::Number(value.into());
+        }
+    }
+    if <i32 as FromSql>::accepts(ty) {
+        if let Ok(value) = <i32 as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::Number(value.into());
+        }
+    }
+    if <i64 as FromSql>::accepts(ty) {
+        if let Ok(value) = <i64 as FromSql>::from_sql(ty, bytes) {
+            return super::safe_i64_to_json(value);
+        }
+    }
+    if <f32 as FromSql>::accepts(ty) {
+        if let Ok(value) = <f32 as FromSql>::from_sql(ty, bytes) {
+            return pg_float_number(value as f64);
+        }
+    }
+    if <f64 as FromSql>::accepts(ty) {
+        if let Ok(value) = <f64 as FromSql>::from_sql(ty, bytes) {
+            return pg_float_number(value);
+        }
+    }
+    if *ty == Type::NUMERIC {
+        if let Some(text) = decode_pg_numeric_bytes(bytes) {
+            return serde_json::Value::String(text);
+        }
+    }
+    if <uuid::Uuid as FromSql>::accepts(ty) {
+        if let Ok(value) = <uuid::Uuid as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::String(value.to_string());
+        }
+    }
+    if <chrono::NaiveDate as FromSql>::accepts(ty) {
+        if let Ok(value) = <chrono::NaiveDate as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::String(value.to_string());
+        }
+    }
+    if <chrono::NaiveTime as FromSql>::accepts(ty) {
+        if let Ok(value) = <chrono::NaiveTime as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::String(value.to_string());
+        }
+    }
+    if <chrono::NaiveDateTime as FromSql>::accepts(ty) {
+        if let Ok(value) = <chrono::NaiveDateTime as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::String(value.to_string());
+        }
+    }
+    if <chrono::DateTime<chrono::Utc> as FromSql>::accepts(ty) {
+        if let Ok(value) = <chrono::DateTime<chrono::Utc> as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::String(value.to_rfc3339());
+        }
+    }
+    if <String as FromSql>::accepts(ty) {
+        if let Ok(value) = <String as FromSql>::from_sql(ty, bytes) {
+            return serde_json::Value::String(value);
+        }
+    }
+    serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned())
+}
+
 /// A `FromSql` adapter that accepts any PostgreSQL type and returns the raw
 /// bytes unchanged. Used to decode custom types like pgvector whose binary
 /// format we handle ourselves.
@@ -667,6 +860,11 @@ fn pg_array_to_json_value(row: &Row, idx: usize) -> Option<serde_json::Value> {
     }
     if let Ok(values) = row.try_get::<_, Vec<Option<PgAnyString>>>(idx) {
         return Some(pg_optional_array_to_json(values, |v| serde_json::Value::String(v.0)));
+    }
+    // Multi-dimensional arrays share the array OID with flat ones but fail
+    // every Vec<T> probe above; fall back to the server's own literal form.
+    if let Ok(literal) = row.try_get::<_, PgNdimArrayLiteral>(idx) {
+        return Some(serde_json::Value::String(literal.0));
     }
     None
 }
@@ -8487,6 +8685,68 @@ mod tests {
             }
         }
         raw
+    }
+
+    fn postgres_ndim_array_binary(elem_type: &Type, dims: &[i32], elements: &[Option<Vec<u8>>]) -> Vec<u8> {
+        assert_eq!(dims.iter().map(|&len| len as usize).product::<usize>(), elements.len());
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&i32::try_from(dims.len()).unwrap().to_be_bytes());
+        raw.extend_from_slice(&i32::from(elements.iter().any(Option::is_none)).to_be_bytes());
+        raw.extend_from_slice(&elem_type.oid().to_be_bytes());
+        for len in dims {
+            raw.extend_from_slice(&len.to_be_bytes());
+            raw.extend_from_slice(&1_i32.to_be_bytes());
+        }
+        for element in elements {
+            if let Some(element) = element {
+                raw.extend_from_slice(&i32::try_from(element.len()).unwrap().to_be_bytes());
+                raw.extend_from_slice(element);
+            } else {
+                raw.extend_from_slice(&(-1_i32).to_be_bytes());
+            }
+        }
+        raw
+    }
+
+    fn int4_bytes(value: i32) -> Vec<u8> {
+        value.to_be_bytes().to_vec()
+    }
+
+    fn text_bytes(value: &str) -> Vec<u8> {
+        value.as_bytes().to_vec()
+    }
+
+    #[test]
+    fn ndim_array_decodes_two_dimensional_integers_as_server_literal() {
+        // `SELECT '{{1,2,3},{4,5,6},{7,8,9}}'::int[]` — same _int4 OID as a
+        // flat array, but tokio-postgres's Vec<T> rejects ndim > 1 (#8457).
+        let raw = postgres_ndim_array_binary(
+            &Type::INT4,
+            &[3, 3],
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9].iter().map(|&v| Some(int4_bytes(v))).collect::<Vec<_>>(),
+        );
+        let decoded = PgNdimArrayLiteral::from_sql(&Type::INT4_ARRAY, &raw).unwrap();
+        assert_eq!(decoded.0, "{{1,2,3},{4,5,6},{7,8,9}}");
+    }
+
+    #[test]
+    fn ndim_array_quotes_text_elements_and_renders_nulls() {
+        let raw = postgres_ndim_array_binary(
+            &Type::TEXT,
+            &[2, 2],
+            &[Some(text_bytes("a b")), Some(text_bytes("c,d")), Some(text_bytes("")), None],
+        );
+        let decoded = PgNdimArrayLiteral::from_sql(&Type::TEXT_ARRAY, &raw).unwrap();
+        assert_eq!(decoded.0, r#"{{"a b","c,d"},{"",NULL}}"#);
+    }
+
+    #[test]
+    fn ndim_array_renders_bool_and_double_scalars() {
+        let bool_raw = postgres_ndim_array_binary(&Type::BOOL, &[2], &[Some(vec![1]), Some(vec![0])]);
+        assert_eq!(PgNdimArrayLiteral::from_sql(&Type::BOOL_ARRAY, &bool_raw).unwrap().0, "{t,f}");
+
+        let float_raw = postgres_ndim_array_binary(&Type::FLOAT8, &[2], &[Some(1.5f64.to_be_bytes().to_vec()), None]);
+        assert_eq!(PgNdimArrayLiteral::from_sql(&Type::FLOAT8_ARRAY, &float_raw).unwrap().0, "{1.5,NULL}");
     }
 
     #[test]
