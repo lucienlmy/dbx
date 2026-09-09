@@ -556,10 +556,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
     const val = resolvedItem?.data[contextCell.value.col] ?? null;
     // 外部剪贴板呈现文本型 MySQL VARBINARY（NULL 也按空串输出）；内部网格副本仍保留原 hex，保证回粘无损。
     const rawValue = clipboardCellValue(binaryClipboardCellValue(val, contextCell.value.col));
-    const copyValue =
-      options.databaseType.value === "oracle" && isTemporalColumnType(options.columnTypes.value?.[contextCell.value.col])
-        ? options.displayValue?.(val, sourceIndex) ?? rawValue
-        : rawValue;
+    const copyValue = options.databaseType.value === "oracle" && isTemporalColumnType(options.columnTypes.value?.[contextCell.value.col]) ? (options.displayValue?.(val, sourceIndex) ?? rawValue) : rawValue;
     await copyText(copyValue, { rows: [[val]] });
   }
 

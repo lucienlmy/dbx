@@ -749,23 +749,7 @@ describe("useDataGridExport prepared row statements", () => {
       columns: [{ name: "created_at", data_type: "timestamp", is_nullable: true }],
       primaryKeys: [],
     };
-    const state = createExportState(
-      table,
-      ["created_at"],
-      undefined,
-      ["2020-12-02T15:18:29"],
-      undefined,
-      undefined,
-      [],
-      DEFAULT_DATA_GRID_EXTRACTOR_OPTIONS,
-      false,
-      undefined,
-      false,
-      1,
-      0,
-      "oracle",
-      () => "2020-12-02 15:18:29",
-    );
+    const state = createExportState(table, ["created_at"], undefined, ["2020-12-02T15:18:29"], undefined, undefined, [], DEFAULT_DATA_GRID_EXTRACTOR_OPTIONS, false, undefined, false, 1, 0, "oracle", () => "2020-12-02 15:18:29");
 
     await state.copyCell();
 
