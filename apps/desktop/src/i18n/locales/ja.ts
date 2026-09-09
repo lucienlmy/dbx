@@ -4,9 +4,11 @@ import { consulUiMessages } from "./consulUi";
 import { nacosAccessControlMessages, nacosAccessControlTabs } from "./nacosAccessControl";
 import { sqlServerTraceMessages as sqlServerTrace } from "./sqlServerTraceMessages";
 import { meilisearchManagementJa } from "./meilisearchManagement";
+import { redisGroupingJa as redisGrouping } from "./redisGrouping";
 
 const consul = {
   ...consulUiMessages,
+  redisGrouping,
   prefixPlaceholder: "Key prefix, e.g. app/ or services/",
   newKey: "New Key",
   loadingKeys: "Loading keys...",

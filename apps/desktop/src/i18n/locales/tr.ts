@@ -3,9 +3,11 @@ import docs from "./docs/tr";
 import { consulUiMessages } from "./consulUi";
 import { sqlServerTraceMessages as sqlServerTrace } from "./sqlServerTraceMessages";
 import { meilisearchManagementTr } from "./meilisearchManagement";
+import { redisGroupingTr as redisGrouping } from "./redisGrouping";
 
 const consul = {
   ...consulUiMessages,
+  redisGrouping,
   prefixPlaceholder: "Anahtar öneki, örn. app/ veya services/",
   newKey: "Yeni Anahtar",
   loadingKeys: "Anahtarlar yükleniyor...",

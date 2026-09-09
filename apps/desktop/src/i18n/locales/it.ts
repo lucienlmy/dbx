@@ -1,11 +1,13 @@
 import { withEnglishFallback } from "./fallback";
 import { meilisearchManagementIt } from "./meilisearchManagement";
+import { redisGroupingIt as redisGrouping } from "./redisGrouping";
 import docs from "./docs/it";
 import { consulUiMessages } from "./consulUi";
 import { nacosAccessControlMessages, nacosAccessControlTabs } from "./nacosAccessControl";
 import { sqlServerTraceMessages as sqlServerTrace } from "./sqlServerTraceMessages";
 const consul = {
   ...consulUiMessages,
+  redisGrouping,
   prefixPlaceholder: "Key prefix, e.g. app/ or services/",
   newKey: "New Key",
   loadingKeys: "Loading keys...",
